@@ -1,0 +1,228 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- ✅ Spring Boot Parent -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.10</version>
+        <relativePath />
+    </parent>
+
+    <groupId>wl</groupId>
+    <artifactId>Applied_ABC_BCBA_RBT_validation</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>Applied_ABC_BCBA_RBT_validation</name>
+
+    <properties>
+        <java.version>17</java.version>
+        <axis2.version>1.8.2</axis2.version>
+        <spring-ai.version>1.0.0-M6</spring-ai.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>dev.langchain4j</groupId>
+                <artifactId>langchain4j-bom</artifactId>
+                <version>0.36.2</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <!-- ✅ Dependencies -->
+    <dependencies>
+ <dependency>
+    <groupId>com.openai</groupId>
+    <artifactId>openai-java</artifactId>
+    <version>4.2.0</version>
+</dependency>
+
+		<!-- Spring Boot Core -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+		<dependency>
+			<groupId>com.squareup.okhttp3</groupId>
+			<artifactId>okhttp</artifactId>
+			<version>4.12.0</version>
+		</dependency>
+		<!-- Spring Boot Web -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+		<!-- Spring Boot DevTools -->
+          <!--<dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-devtools</artifactId>
+            <scope>runtime</scope>
+            <optional>true</optional>
+        </dependency>
+-->
+		<!-- Testing -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+		<!-- Playwright -->
+        <dependency>
+            <groupId>com.microsoft.playwright</groupId>
+            <artifactId>playwright</artifactId>
+            <version>1.55.0</version>
+        </dependency>
+
+		<!-- Apache POI -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.2.3</version>
+        </dependency>
+
+		<!-- PDF -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>2.0.29</version>
+        </dependency>
+
+		<!-- Docx4j (exclude slf4j-nop — conflicts with Logback; see SLF4J multiple bindings warning) -->
+        <dependency>
+            <groupId>org.docx4j</groupId>
+            <artifactId>docx4j-export-fo</artifactId>
+            <version>11.4.8</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-nop</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+		<!-- JAXB (required for Java 17+) -->
+        <dependency>
+            <groupId>jakarta.xml.bind</groupId>
+            <artifactId>jakarta.xml.bind-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.glassfish.jaxb</groupId>
+            <artifactId>jaxb-runtime</artifactId>
+        </dependency>
+
+		<!-- Axis2 -->
+        <dependency>
+            <groupId>org.apache.axis2</groupId>
+            <artifactId>axis2-adb</artifactId>
+            <version>${axis2.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.axis2</groupId>
+            <artifactId>axis2-transport-http</artifactId>
+            <version>${axis2.version}</version>
+        </dependency>
+
+		<!-- JSON -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+        </dependency>
+
+		<!-- Dotenv for loading .env files -->
+        <dependency>
+            <groupId>io.github.cdimascio</groupId>
+            <artifactId>dotenv-java</artifactId>
+            <version>3.0.0</version>
+        </dependency>
+
+        <!-- Spring AI: OpenAI-compatible embeddings + optional chat (same HTTP shape as LLMService) -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-openai-spring-boot-starter</artifactId>
+            <version>${spring-ai.version}</version>
+        </dependency>
+
+		<!-- Jsoup for HTML parsing -->
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+            <version>1.18.1</version>
+        </dependency>
+
+        <!-- LangChain4j core: EmbeddingModel + Embedding types (embeddings HTTP via LLMService) -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-core</artifactId>
+        </dependency>
+
+		<!-- Local module -->
+        <dependency>
+            <groupId>org.sikuli</groupId>
+            <artifactId>sikuli-api</artifactId>
+            <version>1.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.sikulix</groupId>
+            <artifactId>sikulixapi</artifactId>
+            <version>2.0.5</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-nop</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+    </dependencies>
+
+	<!-- ✅ Spring Boot Plugin -->
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.wl.zotecAgent.BotApplication</mainClass>
+                    <jvmArguments>-Xmx2g</jvmArguments>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <configuration>
+                    <mainClass>wl.ai.rag.RAG_Coding.RagAlphaRunner</mainClass>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>consideration-files</id>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                        <configuration>
+                            <mainClass>wl.ai.rag.consideration.ConsiderationRagRunner</mainClass>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
