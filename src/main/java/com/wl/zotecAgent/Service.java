@@ -163,7 +163,6 @@ public class Service {
 	}
 
 	// 4) Fill row details for each JSON CPT that exists on the UI
-	String formServiceLocationApplied = null;
 	for (Map<String, Object> entry : cptEntries) {
 	    String code = str(entry, "code");
 	    if (code == null) {
@@ -175,19 +174,12 @@ public class Service {
 		continue;
 	    }
 
-	    logger.info("CPT fill order for {}: modifiers → units → diagnoses → Service Location → POS", code);
+	    logger.info("CPT fill order for {}: modifiers → units → diagnoses → Service Location (row only) → POS", code);
 	    fillCptRowDetails(page, row, entry, icdOrder);
 
 	    String rowServiceLoc = firstNonBlank(str(entry, "servicelocation"), str(entry, "service_location"));
 	    if (rowServiceLoc != null && !rowServiceLoc.isBlank()) {
 		applyCptServiceLocation(page, row, code, rowServiceLoc);
-		if (formServiceLocationApplied == null
-			|| !formServiceLocationApplied.equalsIgnoreCase(rowServiceLoc.trim())) {
-		    if (applyFormServiceLocation(page, rowServiceLoc)) {
-			formServiceLocationApplied = rowServiceLoc.trim();
-			logger.info("Form Service Location set to '{}' for CPT {}", formServiceLocationApplied, code);
-		    }
-		}
 		Thread.sleep(250);
 	    }
 
@@ -259,20 +251,28 @@ public class Service {
 	}
     }
 
-    /** Row-level Service Location when present on the charge. */
+    /**
+     * Fills Service Location only when the CPT row has that control.
+     * Does not use the patient-details / header {@code #s2id_serviceLocation}.
+     */
     private void applyCptServiceLocation(Page page, Locator row, String code, String serviceLocation) {
 	if (serviceLocation == null || serviceLocation.isBlank()) {
 	    return;
 	}
 	FieldBundle fields = resolveCptDetailFields(row);
 	if (fields.serviceLocation != null) {
+	    logger.info("CPT {} row has Service Location — setting '{}'", code, serviceLocation);
 	    setInputForce(page, fields.serviceLocation, serviceLocation, "servicelocation for " + code);
 	    return;
 	}
-	if (!setSelect2InRow(page, row, serviceLocation, "service", "servicelocation for " + code)
-		&& !setSelect2InRow(page, row, serviceLocation, "location", "servicelocation for " + code)) {
-	    PlayTestActionLog.skip("servicelocation for " + code, "no row field; will try form-level");
+	if (setSelect2InRow(page, row, serviceLocation, "service", "servicelocation for " + code)
+		|| setSelect2InRow(page, row, serviceLocation, "location", "servicelocation for " + code)) {
+	    logger.info("CPT {} row Service Location Select2 set to '{}'", code, serviceLocation);
+	    return;
 	}
+	logger.info("CPT {} has no Service Location field on the row — skipping (JSON had '{}')",
+		code, serviceLocation);
+	PlayTestActionLog.skip("servicelocation for " + code, "no Service Location field on CPT row");
     }
 
     /** Opens charge Location/POC panel so charge POS Select2 is in the DOM. */
@@ -753,50 +753,6 @@ public class Service {
 	    logger.warn("Unable to set {}: {}", desc, e.getMessage());
 	    PlayTestActionLog.skip(desc, e.getMessage());
 	}
-    }
-
-    /** Form-level Service Location dropdown (once), when CPT rows have no per-line control. */
-    private boolean applyFormServiceLocation(Page page, String serviceLocation) {
-	if (serviceLocation == null || serviceLocation.isBlank()) {
-	    return false;
-	}
-	try {
-	    Locator choice = page.locator("#s2id_serviceLocation .select2-choice").first();
-	    if (choice.count() == 0 || !choice.isVisible()) {
-		return false;
-	    }
-	    String current = "";
-	    try {
-		current = page.locator("#s2id_serviceLocation .select2-chosen").first().innerText().trim();
-	    } catch (Exception ignored) {
-	    }
-	    if (serviceLocation.equalsIgnoreCase(current)) {
-		PlayTestActionLog.skip("Service Location (form)", current);
-		return true;
-	    }
-	    PlayTestActionLog.update("Service Location (form)", "'" + current + "' -> '" + serviceLocation + "'");
-	    choice.click();
-	    Thread.sleep(200);
-	    Locator search = page.locator(
-		    ".select2-drop-active .select2-search input.select2-input, .select2-drop:not(.select2-display-none) .select2-search input.select2-input")
-		    .first();
-	    search.waitFor(new Locator.WaitForOptions()
-		    .setState(com.microsoft.playwright.options.WaitForSelectorState.VISIBLE).setTimeout(5000));
-	    search.fill(serviceLocation);
-	    Thread.sleep(600);
-	    Locator results = page.locator(
-		    ".select2-drop-active .select2-results li.select2-result-selectable, .select2-drop:not(.select2-display-none) .select2-results li.select2-result-selectable");
-	    if (results.count() > 0) {
-		results.first().click();
-		Thread.sleep(200);
-		return true;
-	    }
-	    page.keyboard().press("Escape");
-	    PlayTestActionLog.skip("Service Location (form)", "no select2 match for '" + serviceLocation + "'");
-	} catch (Exception e) {
-	    logger.warn("Unable to set form Service Location: {}", e.getMessage());
-	}
-	return false;
     }
 
     /**

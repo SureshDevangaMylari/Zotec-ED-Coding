@@ -23,7 +23,7 @@ public class FlowStartupRunner {
 
     private final BotService botService;
 
-    @Value("${flow.agent-id:698ae5c9b0bf82d7668c29c8}")
+    @Value("${flow.agent-id}")
     private String agentId;
 
     public FlowStartupRunner(BotService botService) {

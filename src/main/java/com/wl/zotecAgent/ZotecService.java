@@ -61,6 +61,9 @@ public class ZotecService {
 
     @Value("${zotec.portal.password}")
     private String portalPassword;
+    
+    @Value("${zotec.portal.URL}")
+    private String zotecPortalURL;
 
     private enum DetectedImageKind {
 	NONE, PNG, JPEG, GIF, WEBP
@@ -73,7 +76,7 @@ public class ZotecService {
 		    "zotec.portal.username / zotec.portal.password must be set in application.properties");
 	}
 	log.info("Logging into Zotec portal as {}", portalUsername);
-	page.navigate("https://coding.zotecpartners.com/");
+	page.navigate(zotecPortalURL);
 	PlaywrightService ps = new PlaywrightService(page);
 	ps.fill(page.getByRole(AriaRole.TEXTBOX, new Page.GetByRoleOptions().setName("E-Mail Address")),
 		portalUsername, "entering username");

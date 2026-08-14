@@ -33,7 +33,7 @@ public class PlayTest2 {
 
     public static final Logger logger = LogManager.getLogger(PlayTest2.class);
 
-    private static final String DEFAULT_RESUME_JSON = "resources/jsonfolder/review-ed397c43-f294-49a4-8ad0-977864075eb2.json";
+    private static final String DEFAULT_RESUME_JSON = "resources/jsonfolder/review-3df8f7c9-75dd-4e41-a2c6-5f82f1597ee2.json";
 
     public static void main(String[] args) throws Exception {
 	String jsonPath = args.length > 0 ? args[0] : DEFAULT_RESUME_JSON;

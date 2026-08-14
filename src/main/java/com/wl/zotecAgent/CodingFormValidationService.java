@@ -869,6 +869,7 @@ public class CodingFormValidationService {
 		    safeStr(asMap(data.get("billing")), "accident_type"),
 		    safeStr(asMap(data.get("billing")), "accident_code"));
 	    if (accidentType == null || accidentType.isBlank()) {
+		log.info("Accident Type: no value in JSON");
 		PlayTestActionLog.noData("Accident Type");
 		return;
 	    }
@@ -877,21 +878,80 @@ public class CodingFormValidationService {
 	    if (accidentType.contains(" - ")) {
 		accidentType = accidentType.split(" - ", 2)[0].trim();
 	    }
-	    if (!fieldPresent(ACCIDENT_TYPE_CHOICE) && !fieldPresent(ACCIDENT_TYPE)) {
+	    boolean typeOnForm = fieldPresent(ACCIDENT_TYPE_CHOICE) || fieldPresent(ACCIDENT_TYPE)
+		    || fieldPresent(ACCIDENT_TYPE_SELECT);
+	    if (!typeOnForm) {
+		log.info("Accident Type: field not on form");
 		PlayTestActionLog.skip("Accident Type", "field not on form");
 		return;
 	    }
 
 	    String current = getPageText(ACCIDENT_TYPE_CHOSEN);
 	    if (current != null && current.toUpperCase().contains(accidentType.toUpperCase())) {
+		log.info("Accident Type already '{}', skipping", current);
 		PlayTestActionLog.skip("Accident Type", current, accidentType);
 		return;
 	    }
 
+	    log.info("Setting Accident Type to '{}' (was '{}')", accidentType, current);
 	    PlayTestActionLog.update("Accident Type", "'" + current + "' -> '" + accidentType + "'");
+
+	    Locator nativeSelect = page.locator(ACCIDENT_TYPE_SELECT).first();
+	    if (nativeSelect.count() > 0) {
+		try {
+		    nativeSelect.selectOption(new SelectOption().setValue(accidentType));
+		    sleep(150);
+		    final String code = accidentType;
+		    page.evaluate("(code) => {"
+			    + "  const sel = document.querySelector('#accidenttype')"
+			    + "      || document.querySelector(\"select[name='accidentType']\");"
+			    + "  if (!sel) return;"
+			    + "  sel.value = code;"
+			    + "  sel.dispatchEvent(new Event('input', { bubbles: true }));"
+			    + "  sel.dispatchEvent(new Event('change', { bubbles: true }));"
+			    + "  const $ = window.jQuery || window.$;"
+			    + "  if ($ && $.fn) { try { $(sel).val(code).trigger('change'); } catch (e) {} }"
+			    + "  const ang = window.angular;"
+			    + "  if (ang) {"
+			    + "    try {"
+			    + "      const scope = ang.element(sel).scope();"
+			    + "      if (scope) {"
+			    + "        if (scope.editor) scope.editor.accidentType = code;"
+			    + "        scope.form = scope.form || {};"
+			    + "        scope.form.accidentType = code;"
+			    + "        if (scope.$apply) scope.$apply();"
+			    + "      }"
+			    + "    } catch (e2) {}"
+			    + "  }"
+			    + "  const chosen = document.querySelector('#s2id_accidenttype .select2-chosen');"
+			    + "  if (chosen) {"
+			    + "    const opt = sel.options[sel.selectedIndex];"
+			    + "    chosen.textContent = (opt && opt.text) ? opt.text : code;"
+			    + "  }"
+			    + "}", code);
+		    sleep(200);
+		    String afterNative = "";
+		    try {
+			afterNative = nativeSelect.inputValue();
+		    } catch (Exception ignored) {
+		    }
+		    String afterChosen = getPageText(ACCIDENT_TYPE_CHOSEN);
+		    if (code.equalsIgnoreCase(afterNative != null ? afterNative.trim() : "")
+			    || (afterChosen != null && afterChosen.toUpperCase().contains(code.toUpperCase()))) {
+			log.info("Accident Type set via native select to '{}'", afterNative);
+			return;
+		    }
+		    log.warn("Accident Type native select did not stick (value='{}', chosen='{}') — trying Select2",
+			    afterNative, afterChosen);
+		} catch (Exception e) {
+		    log.warn("Accident Type native select failed: {} — trying Select2", e.getMessage());
+		}
+	    }
+
 	    dismissSelect2();
 	    Locator choice = page.locator(ACCIDENT_TYPE_CHOICE).first();
 	    if (choice.count() == 0) {
+		log.warn("Accident Type Select2 choice not on form");
 		PlayTestActionLog.skip("Accident Type", "Select2 choice not on form");
 		return;
 	    }
@@ -901,6 +961,8 @@ public class CodingFormValidationService {
 	    if (search != null) {
 		search.fill(accidentType);
 		sleep(350);
+	    } else {
+		log.warn("Accident Type Select2 search not visible after click");
 	    }
 	    Locator option = page.locator(
 		    ".select2-drop:not(.select2-display-none) .select2-results li.select2-result-selectable")
@@ -909,6 +971,7 @@ public class CodingFormValidationService {
 		option.first().click(new Locator.ClickOptions().setForce(true));
 	    } else if (!selectFirstSelect2Result()) {
 		dismissSelect2();
+		log.warn("Accident Type: no matching Select2 option for '{}'", accidentType);
 		PlayTestActionLog.skip("Accident Type", "no matching option for '" + accidentType + "'");
 		return;
 	    }

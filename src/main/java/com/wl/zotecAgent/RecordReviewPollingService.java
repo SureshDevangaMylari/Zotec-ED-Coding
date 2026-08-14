@@ -32,7 +32,7 @@ public class RecordReviewPollingService {
 
     private final RestTemplate restTemplate;
 
-    @Value("${document.review.base-url:http://10.1.240.237:8000}")
+    @Value("${document.review.base-url}")
     private String reviewBaseUrl;
 
     @Value("${bot.poll.desktop-id}")
@@ -41,10 +41,10 @@ public class RecordReviewPollingService {
     @Value("${bot.poll.secret}")
     private String botSecret;
 
-    @Value("${document.review.poll-interval-seconds:5}")
+    @Value("${document.review.poll-interval-seconds}")
     private long pollIntervalSeconds;
 
-    @Value("${batch.resume.timeout-minutes:60}")
+    @Value("${batch.resume.timeout-minutes}")
     private long timeoutMinutes;
 
     public RecordReviewPollingService(RestTemplate restTemplate) {

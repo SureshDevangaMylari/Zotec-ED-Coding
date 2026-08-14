@@ -77,6 +77,7 @@ public final class FormSelectors {
     public static final String ACCIDENT_TYPE = "#s2id_accidenttype";
     public static final String ACCIDENT_TYPE_CHOICE = ACCIDENT_TYPE + " .select2-choice";
     public static final String ACCIDENT_TYPE_CHOSEN = ACCIDENT_TYPE + " .select2-chosen";
+    public static final String ACCIDENT_TYPE_SELECT = "#accidenttype, select[name='accidentType']";
 
     // Admitted — Yes button when not yet admitted; Admit Date when already admitted
     public static final String ADMITTED_YES = XP + "//label[contains(text(),'Admitted')]/following-sibling::div//button[text()='Yes']";

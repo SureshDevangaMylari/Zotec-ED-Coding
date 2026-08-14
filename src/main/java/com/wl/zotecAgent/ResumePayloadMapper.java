@@ -155,11 +155,27 @@ public final class ResumePayloadMapper {
         }
 
         // Top-level review fields used by CodingFormValidationService.updateBillingExtras
-        putIfPresent(out, "billing_type", str(root, "billing_type"));
-        putIfPresent(out, "accident_date", str(root, "accident_date"));
-        putIfPresent(out, "accident_type", str(root, "accident_type"));
+        // (also accept the same keys nested under billing)
+        Map<String, Object> billing = asMap(root.get("billing"));
+        if (billing != null && !billing.isEmpty()) {
+            out.put("billing", billing);
+        }
+        putIfPresent(out, "billing_type", firstStr(root, "billing_type"));
+        if (out.get("billing_type") == null) {
+            putIfPresent(out, "billing_type", firstStr(billing, "billing_type"));
+        }
+        putIfPresent(out, "accident_date", firstStr(root, "accident_date"));
+        if (out.get("accident_date") == null) {
+            putIfPresent(out, "accident_date", firstStr(billing, "accident_date"));
+        }
+        putIfPresent(out, "accident_type", firstStr(root, "accident_type"));
+        if (out.get("accident_type") == null) {
+            putIfPresent(out, "accident_type", firstStr(billing, "accident_type", "accident_code"));
+        }
         if (root.containsKey("critical_care")) {
             out.put("critical_care", root.get("critical_care"));
+        } else if (billing != null && billing.containsKey("critical_care")) {
+            out.put("critical_care", billing.get("critical_care"));
         }
 
         Map<String, String> moveToIssue = extractMoveToIssue(resumePayload);
