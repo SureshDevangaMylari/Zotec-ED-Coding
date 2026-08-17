@@ -364,6 +364,7 @@ public class FlowText {
     /**
      * Wait for dictated report text. Does not advance checkbox — only returns when text is ready,
      * "no more reports" is shown, or a long poll expires (caller stays on same checkbox).
+     * Polls quietly (no full-text logs); logs length once when ready.
      */
     private String waitForDictatedReportText(PlaywrightService ps, Page page, Locator reportLoc)
 	    throws InterruptedException {
@@ -372,14 +373,10 @@ public class FlowText {
 		return null;
 	    }
 	    dismissDataLockedIfPresent(page);
-	    try {
-		if (reportLoc.count() > 0 && reportLoc.first().isVisible()) {
-		    String text = ps.getText(reportLoc, "getting text");
-		    if (text != null && !text.isBlank()) {
-			return text;
-		    }
-		}
-	    } catch (Exception ignored) {
+	    String text = readDictatedReportTextQuiet(reportLoc);
+	    if (text != null && !text.isBlank()) {
+		logger.info("Dictated report ready ({} chars)", text.length());
+		return text;
 	    }
 	    Thread.sleep(1000);
 	}
@@ -415,15 +412,11 @@ public class FlowText {
 		return SkipAdvanceResult.NO_MORE_REPORTS;
 	    }
 	    try {
-		if (reportLoc.count() > 0 && reportLoc.first().isVisible()) {
-		    String next = ps.getText(reportLoc, "dictated text after manual action");
-		    if (next != null && !next.isBlank()) {
-			String fp = textFingerprint(next);
-			if (previousFingerprint == null || !fp.equals(previousFingerprint)) {
-			    logger.info("Next patient detected after manual Submit/Skip");
-			    return SkipAdvanceResult.NEXT_PATIENT;
-			}
-		    }
+		String fp = dictatedTextFingerprint(reportLoc);
+		if (fp != null && !fp.isBlank()
+			&& (previousFingerprint == null || !fp.equals(previousFingerprint))) {
+		    logger.info("Next patient detected after manual Submit/Skip (text fingerprint changed)");
+		    return SkipAdvanceResult.NEXT_PATIENT;
 		}
 	    } catch (Exception ignored) {
 	    }
@@ -476,14 +469,10 @@ public class FlowText {
 		return SkipAdvanceResult.NO_MORE_REPORTS;
 	    }
 	    try {
-		if (reportLoc.count() > 0 && reportLoc.first().isVisible()) {
-		    String next = ps.getText(reportLoc, "next dictated text");
-		    if (next != null && !next.isBlank()) {
-			String fp = textFingerprint(next);
-			if (!fp.equals(previousFingerprint)) {
-			    return SkipAdvanceResult.NEXT_PATIENT;
-			}
-		    }
+		String fp = dictatedTextFingerprint(reportLoc);
+		if (fp != null && !fp.isBlank() && !fp.equals(previousFingerprint)) {
+		    logger.info("Next patient detected after Skip (text fingerprint changed)");
+		    return SkipAdvanceResult.NEXT_PATIENT;
 		}
 	    } catch (Exception ignored) {
 	    }
@@ -545,8 +534,35 @@ public class FlowText {
     }
 
     private static String textFingerprint(String text) {
+	if (text == null) {
+	    return "";
+	}
 	String t = text.trim();
 	return t.substring(0, Math.min(200, t.length()));
+    }
+
+    /**
+     * First 200 chars of dictated text — used like Flow's image fingerprint.
+     * Does not log the report body.
+     */
+    private static String dictatedTextFingerprint(Locator reportLoc) {
+	return textFingerprint(readDictatedReportTextQuiet(reportLoc));
+    }
+
+    /** innerText of {@code #dictated-report-text} with no PlaywrightService dump. */
+    private static String readDictatedReportTextQuiet(Locator reportLoc) {
+	try {
+	    if (reportLoc.count() == 0 || !reportLoc.first().isVisible()) {
+		return null;
+	    }
+	    String text = reportLoc.first().innerText();
+	    if (text == null || text.isBlank()) {
+		return null;
+	    }
+	    return text;
+	} catch (Exception e) {
+	    return null;
+	}
     }
 
     static void saveFile() throws IOException, InterruptedException {
