@@ -9,9 +9,9 @@ import com.microsoft.playwright.*;
 @Service
 public class BotService {
 
-    private final FlowText flow2;
+    private final Flow flow2;
 
-    public BotService(FlowText flow2) {
+    public BotService(Flow flow2) {
 	this.flow2 = flow2;
     }
 
