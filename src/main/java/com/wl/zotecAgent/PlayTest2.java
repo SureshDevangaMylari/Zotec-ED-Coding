@@ -33,7 +33,7 @@ public class PlayTest2 {
 
     public static final Logger logger = LogManager.getLogger(PlayTest2.class);
 
-    private static final String DEFAULT_RESUME_JSON = "resources/jsonfolder/review-bae7a554-f436-424f-9f73-59ecb45594e8.json";
+    private static final String DEFAULT_RESUME_JSON = "resources/jsonfolder/review-500c919f-b28c-4cc4-a252-59d79cf64528.json";
 
     public static void main(String[] args) throws Exception {
 	String jsonPath = args.length > 0 ? args[0] : DEFAULT_RESUME_JSON;
@@ -73,7 +73,19 @@ public class PlayTest2 {
 	     zs.validatePatientDetails(page, patientInfo);
 	     
 	     Thread.sleep(400);
+	   
 
+	    Service s = new Service();
+	    List<Map<String, Object>> cptEntries = ResumePayloadMapper.extractCptEntries(resumePayload);
+	    List<String> icdList = ResumePayloadMapper.extractIcdCodeList(resumePayload);
+
+	    logger.info("validateCPT entries: {}", cptEntries);
+	    logger.info("validateICD codes: {}", icdList);
+
+	    //CPT fill
+	    s.validateCPT(page, cptEntries, icdList);
+	    
+	    //ED form fill
 	    PlayTestActionLog.step("open ED form");
 	    ps.click(page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("ED")), "clicking ED");
 	    page.locator("#codingAssistantBody #autoCoderForm, #autoCoderForm").first()
@@ -89,19 +101,11 @@ public class PlayTest2 {
 	    } else {
 		PlayTestActionLog.step("ED EM form");
 	    }
+	    
 	    ED_EMFormPlaywrightApplier.applyEdFormFromResume(page, resumePayload);
-
-            ps.click(page.locator("input[type=\"submit\"]"), "ed submit");
-
-	    Service s = new Service();
-	    List<Map<String, Object>> cptEntries = ResumePayloadMapper.extractCptEntries(resumePayload);
-	    List<String> icdList = ResumePayloadMapper.extractIcdCodeList(resumePayload);
-
-	    logger.info("validateCPT entries: {}", cptEntries);
-	    logger.info("validateICD codes: {}", icdList);
-
-	    // Order: CPT → ICD (once) → accident/billing extras → Move to Issue OR RFI (optional, mutually exclusive)
-	    s.validateCPT(page, cptEntries, icdList);
+        ps.click(page.locator("input[type=\"submit\"]"), "ed submit");
+	    
+        //ICD fill
 	    s.validateICD(icdList, page);
 	    new CodingFormValidationService(page).updateBillingExtras(patientInfo);
 	    IssueOrRfiApplier.applyAfterCodingFill(page, resumePayload);

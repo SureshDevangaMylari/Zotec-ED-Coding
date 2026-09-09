@@ -311,6 +311,21 @@ public class Flow {
 	    return true;
 	}
 
+	Service s = new Service();
+	List<Map<String, Object>> cptEntries = ResumePayloadMapper.extractCptEntries(resumePayload);
+	List<String> icdList = ResumePayloadMapper.extractIcdCodeList(resumePayload);
+
+	logger.info("validateCPT entries: {}", cptEntries);
+	logger.info("validateICD codes: {}", icdList);
+
+	// Order matches PlayTest2: CPT → ED → ICD → accident/billing extras → Issue/RFI
+	s.validateCPT(page, cptEntries, icdList);
+
+	if (dismissDataLockedIfPresent(page)) {
+	    logger.info("Data Locked after CPT — OK clicked, move to next patient");
+	    return true;
+	}
+
 	ps.click(page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("ED")), "clicking ED");
 	Thread.sleep(2000);
 	try {
@@ -337,26 +352,19 @@ public class Flow {
 
 	ps.click(page.locator("input[type=\"submit\"]"), "ed submit");
 
+	Thread.sleep(2000);
+
 	if (dismissDataLockedIfPresent(page)) {
 	    logger.info("Data Locked after ED submit — OK clicked, move to next patient");
 	    return true;
 	}
 
-	Service s = new Service();
-	List<Map<String, Object>> cptEntries = ResumePayloadMapper.extractCptEntries(resumePayload);
-	List<String> icdList = ResumePayloadMapper.extractIcdCodeList(resumePayload);
-
-	logger.info("validateCPT entries: {}", cptEntries);
-	logger.info("validateICD codes: {}", icdList);
-
-	// Order: CPT → ICD (once) → accident/billing extras → Move to Issue OR RFI (optional, mutually exclusive)
-	s.validateCPT(page, cptEntries, icdList);
 	s.validateICD(icdList, page);
 	new CodingFormValidationService(page).updateBillingExtras(patientInfo);
 	IssueOrRfiApplier.applyAfterCodingFill(page, resumePayload);
 
 	if (dismissDataLockedIfPresent(page)) {
-	    logger.info("Data Locked after CPT/ICD — OK clicked, move to next patient");
+	    logger.info("Data Locked after ICD/billing — OK clicked, move to next patient");
 	}
 	return true;
     }
