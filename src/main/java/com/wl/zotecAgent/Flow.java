@@ -65,12 +65,17 @@ public class Flow {
      *                        {@link AllowedClients#orderedEntries()}
      */
     public void Start(BrowserContext context, String agentId, List<String> selectedClients) throws Exception {
-	Page page = context.newPage();
+	Page page = resolveWorkfilePage(context);
 	try {
 	    PlaywrightService ps = new PlaywrightService(page);
 
-	    zs.login(page);
-	    Thread.sleep(5000);
+	    boolean didLogin = zs.login(page);
+	    if (didLogin) {
+		Thread.sleep(5000);
+	    } else {
+		logger.info("Skipped Zotec login — moving to Select client(s)");
+		Thread.sleep(1000);
+	    }
 
 	    openClientSelector(ps, page);
 	    List<Locator> clients = ps.getElements(CLIENT_CHECKBOX_XPATH, "getting client checkboxes");
@@ -184,6 +189,27 @@ public class Flow {
 	    e.printStackTrace();
 	    page.pause();
 	}
+    }
+
+    /**
+     * Prefer an existing tab that already shows Select client(s) (restored session);
+     * otherwise open a new page for login / navigate.
+     */
+    private Page resolveWorkfilePage(BrowserContext context) {
+	for (Page existing : context.pages()) {
+	    try {
+		Locator link = existing.getByRole(AriaRole.LINK,
+			new Page.GetByRoleOptions().setName("Select client(s)"));
+		if (link.count() > 0 && link.first().isVisible()) {
+		    logger.info("Reusing existing tab with Select client(s) visible");
+		    existing.bringToFront();
+		    return existing;
+		}
+	    } catch (Exception e) {
+		// try next tab
+	    }
+	}
+	return context.newPage();
     }
 
     /**

@@ -69,25 +69,94 @@ public class ZotecService {
 	NONE, PNG, JPEG, GIF, WEBP
     }
 
-    void login(Page page) throws Exception {
+    /**
+     * Opens the Zotec portal. If the session from the Chrome profile is already on
+     * Coding Workfile ({@code Select client(s)} visible), skips credentials.
+     * If the login page is shown, runs the normal E-Mail → Password → Verify flow.
+     *
+     * @return {@code true} if credentials were entered; {@code false} if already logged in
+     */
+    boolean login(Page page) throws Exception {
+	PlaywrightService ps = new PlaywrightService(page);
+
+	// Existing Chrome tab already on workfile with Select client(s)
+	if (isSelectClientsVisible(page, 1500)) {
+	    log.info("Already logged in — Select client(s) visible; skipping Zotec login");
+	    return false;
+	}
+
+	if (zotecPortalURL == null || zotecPortalURL.isBlank()) {
+	    throw new IllegalStateException("zotec.portal.URL must be set in application.properties");
+	}
+	log.info("Opening Zotec portal {}", zotecPortalURL);
+	page.navigate(zotecPortalURL);
+	try {
+	    page.waitForLoadState();
+	} catch (Exception ignored) {
+	    // continue with visibility checks
+	}
+
+	if (isSelectClientsVisible(page, 8000)) {
+	    log.info("Session restored — Select client(s) visible; skipping Zotec login");
+	    return false;
+	}
+
+	Locator workfile = page.getByText("Coding Workfile");
+	if (isVisible(workfile, 4000) && !isLoginFormVisible(page, 500)) {
+	    log.info("Session active — opening Coding Workfile (skip credential login)");
+	    ps.click(workfile, "click coding workfle");
+	    if (isSelectClientsVisible(page, 10000)) {
+		return false;
+	    }
+	}
+
+	if (!isLoginFormVisible(page, 8000)) {
+	    // Last chance: workfile may have finished loading
+	    if (isSelectClientsVisible(page, 5000)) {
+		log.info("Select client(s) appeared; skipping Zotec login");
+		return false;
+	    }
+	    throw new IllegalStateException(
+		    "Zotec portal did not show login form or Select client(s) — check URL/session");
+	}
+
 	if (portalUsername == null || portalUsername.isBlank() || portalPassword == null
 		|| portalPassword.isBlank()) {
 	    throw new IllegalStateException(
 		    "zotec.portal.username / zotec.portal.password must be set in application.properties");
 	}
-	log.info("Logging into Zotec portal as {}", portalUsername);
-	page.navigate(zotecPortalURL);
-	PlaywrightService ps = new PlaywrightService(page);
+	log.info("Login page detected — signing in as {}", portalUsername);
 	ps.fill(page.getByRole(AriaRole.TEXTBOX, new Page.GetByRoleOptions().setName("E-Mail Address")),
 		portalUsername, "entering username");
 	ps.click(page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Next")), "click next");
 	ps.fill(page.getByRole(AriaRole.TEXTBOX, new Page.GetByRoleOptions().setName("Password")), portalPassword,
 		"enter pass");
-
 	ps.click(page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Verify")), "click verify");
 
-	Locator workfile = page.getByText("Coding Workfile");
-	ps.click(workfile, "click coding workfle");
+	Locator workfileAfterLogin = page.getByText("Coding Workfile");
+	ps.click(workfileAfterLogin, "click coding workfle");
+	return true;
+    }
+
+    private static boolean isSelectClientsVisible(Page page, double timeoutMs) {
+	Locator link = page.getByRole(AriaRole.LINK, new Page.GetByRoleOptions().setName("Select client(s)"));
+	return isVisible(link, timeoutMs);
+    }
+
+    private static boolean isLoginFormVisible(Page page, double timeoutMs) {
+	Locator email = page.getByRole(AriaRole.TEXTBOX, new Page.GetByRoleOptions().setName("E-Mail Address"));
+	return isVisible(email, timeoutMs);
+    }
+
+    private static boolean isVisible(Locator locator, double timeoutMs) {
+	try {
+	    locator.first().waitFor(new Locator.WaitForOptions()
+		    .setState(com.microsoft.playwright.options.WaitForSelectorState.VISIBLE)
+		    .setTimeout(timeoutMs));
+	    return true;
+	} catch (Exception e) {
+	    return false;
+	}
     }
 
     void validateForm() {
