@@ -22,7 +22,8 @@ import com.wl.zotecAgent.selection.ED_EMFormPlaywrightApplier;
 
 /**
  * Image-based coding flow: page images → PDF upload → review → fill form.
- * Walks {@link AllowedClients} in order; skips entries missing from Select client(s).
+ * Walks UI-selected clients (or {@link AllowedClients} when none provided);
+ * skips entries missing from Select client(s).
  * Patient looping and manual Submit/Skip match {@link FlowText}.
  */
 @Component
@@ -56,6 +57,14 @@ public class Flow {
     }
 
     public void Start(BrowserContext context, String agentId) throws Exception {
+	Start(context, agentId, null);
+    }
+
+    /**
+     * @param selectedClients client labels from the UI; when null/empty falls back to
+     *                        {@link AllowedClients#orderedEntries()}
+     */
+    public void Start(BrowserContext context, String agentId, List<String> selectedClients) throws Exception {
 	Page page = context.newPage();
 	try {
 	    PlaywrightService ps = new PlaywrightService(page);
@@ -73,9 +82,11 @@ public class Flow {
 		uiLabels.add(readClientLabel(clients.get(i)));
 	    }
 
-	    List<String> allowlist = AllowedClients.orderedEntries();
+	    List<String> allowlist = (selectedClients != null && !selectedClients.isEmpty())
+		    ? selectedClients
+		    : AllowedClients.orderedEntries();
 	    java.util.Set<Integer> usedUiIndexes = new java.util.HashSet<>();
-	    logger.info("Walking {} AllowedClients entries in order (skip if missing from UI)",
+	    logger.info("Walking {} client entr(y/ies) in order (skip if missing from UI)",
 		    allowlist.size());
 
 	    for (int a = 0; a < allowlist.size(); a++) {

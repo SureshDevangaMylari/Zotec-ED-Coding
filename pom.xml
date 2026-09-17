@@ -194,6 +194,19 @@
 
 	<!-- ✅ Spring Boot Plugin -->
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- Serve UI from java/.../staticResources on classpath -->
+            <resource>
+                <directory>src/main/java/com/wl/zotecAgent/staticResources</directory>
+                <targetPath>com/wl/zotecAgent/staticResources</targetPath>
+                <includes>
+                    <include>**/*</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>

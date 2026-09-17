@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Zotec Coding Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="brand">
+      <h1>Zotec Coding Agent</h1>
+      <p>Choose chart type and clients, then start or stop the bot.</p>
+    </header>
+
+    <main class="panel">
+      <div class="field">
+        <label for="chartType">Chart type</label>
+        <select id="chartType" class="chart-type" name="chartType">
+          <option value="Text">Text</option>
+          <option value="Image">Image</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="clientSearch">Select client(s)</label>
+        <div class="clients-toolbar">
+          <input id="clientSearch" type="search" placeholder="Search clients…" autocomplete="off" />
+          <button type="button" class="linkish" id="selectAllClients">Select all</button>
+          <button type="button" class="linkish" id="clearClients">Clear</button>
+        </div>
+        <div id="clientsPanel" class="clients-panel" role="group" aria-label="Select client(s)"></div>
+        <div id="selectionMeta" class="selection-meta">0 clients selected</div>
+      </div>
+
+      <div class="actions">
+        <button type="button" class="btn btn-start" id="startAgent">Start Agent</button>
+        <button type="button" class="btn btn-stop" id="stopAgent" disabled>Stop Agent</button>
+      </div>
+
+      <div class="status" id="statusBar" data-state="stopped">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="statusText">Agent stopped — open http://localhost:8080 after Spring Boot starts</span>
+      </div>
+    </main>
+  </div>
+
+  <script src="clients.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

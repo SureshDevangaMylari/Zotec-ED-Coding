@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
  * (same Playwright setup as legacy {@link Init2}).
  */
 @Component
-@ConditionalOnProperty(name = "flow.auto-start", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(name = "flow.auto-start", havingValue = "true", matchIfMissing = false)
 public class FlowStartupRunner {
 
     private static final Logger logger = LogManager.getLogger(FlowStartupRunner.class);

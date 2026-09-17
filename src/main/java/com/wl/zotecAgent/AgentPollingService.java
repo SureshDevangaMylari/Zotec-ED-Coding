@@ -65,7 +65,7 @@ public class AgentPollingService {
 
 	    if (AgentRuntimeStatus.STOP.getValue().equals(runtimeStatus)) {
 		System.out.println(" stop bot");
-		BotService.stopBot();
+		Bot.stopBot();
 //		updateAgentStatus(AgentRuntimeStatus.IDLE);
 		botRunning = false;
 	    }
