@@ -33,7 +33,7 @@ public class PlayTest2 {
 
     public static final Logger logger = LogManager.getLogger(PlayTest2.class);
 
-    private static final String DEFAULT_RESUME_JSON = "resources/jsonfolder/review-1c4b085f-2d81-408a-8fb6-df94a16853a6.json";
+    private static final String DEFAULT_RESUME_JSON = "resources/jsonfolder/review-f0cc973c-7478-4c71-a5d8-44ae3b6f1993.json";
 
     public static void main(String[] args) throws Exception {
 	String jsonPath = args.length > 0 ? args[0] : DEFAULT_RESUME_JSON;
@@ -82,10 +82,7 @@ public class PlayTest2 {
 	    logger.info("validateCPT entries: {}", cptEntries);
 	    logger.info("validateICD codes: {}", icdList);
 
-	    //CPT fill
-	    s.validateCPT(page, cptEntries, icdList);
-	    
-	    //ED form fill
+	    // Order: ED → clear-all CPT + fill from JSON → ICD
 	    PlayTestActionLog.step("open ED form");
 	    ps.click(page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("ED")), "clicking ED");
 	    page.locator("#codingAssistantBody #autoCoderForm, #autoCoderForm").first()
@@ -101,11 +98,14 @@ public class PlayTest2 {
 	    } else {
 		PlayTestActionLog.step("ED EM form");
 	    }
-	    
+
 	    ED_EMFormPlaywrightApplier.applyEdFormFromResume(page, resumePayload);
-        ps.click(page.locator("input[type=\"submit\"]"), "ed submit");
+	    ps.click(page.locator("input[type=\"submit\"]"), "ed submit");
 	    
-        //ICD fill
+	    Thread.sleep(2000);
+
+	    s.validateCPT(page, cptEntries, icdList);
+
 	    s.validateICD(icdList, page);
 	    new CodingFormValidationService(page).updateBillingExtras(patientInfo);
 	    IssueOrRfiApplier.applyAfterCodingFill(page, resumePayload);

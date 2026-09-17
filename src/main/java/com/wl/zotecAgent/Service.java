@@ -82,11 +82,9 @@ public class Service {
     }
 
     /**
-     * Syncs UI CPT rows to JSON. Keeps existing {@code 00000} rows. Overwrites other
-     * populated rows with JSON codes in order, then adds remaining JSON codes on
-     * empty rows. Deletes leftover UI codes (not in JSON, not zeros) with NRC reason.
-     * After codes are applied, fills modifier / units / diagnosis pointers / servicelocation / POS.
-     * Description is left to Zotec (auto-set when code is chosen).
+     * Deletes every populated CPT on the UI (including zeros / portal EM), then fills only
+     * codes from JSON. After codes are applied, fills modifier / units / diagnosis pointers /
+     * servicelocation / POS. Description is left to Zotec (auto-set when code is chosen).
      * Mismatch is logged only — bot does not stop (user can Submit/Skip).
      */
     void validateCPT(Page page, List<Map<String, Object>> cptEntries, List<String> icdOrder)
@@ -102,7 +100,7 @@ public class Service {
 		continue;
 	    }
 	    String norm = normalizeCptCode(code);
-	    if (norm.isEmpty() || isZeroCpt(norm) || expectedNormalized.contains(norm)) {
+	    if (norm.isEmpty() || expectedNormalized.contains(norm)) {
 		continue;
 	    }
 	    expectedNormalized.add(norm);
@@ -114,23 +112,42 @@ public class Service {
 	rows.first().waitFor();
 
 	List<String> uiOrder = collectCptUiCodeList(page);
-	logger.info("CPT UI values before sync: {}", uiOrder);
+	logger.info("CPT UI values before clear+fill: {}", uiOrder);
 
-	PlayTestActionLog.update("validateCPT", "keep 00000; overwrite populated rows from JSON; add rest; delete extras");
-	applyJsonCptsOverExistingRows(page, orderedCodes);
-	deleteUnwantedCptRows(page, expectedNormalized, DISABLE_REASON_NRC);
-	Set<String> uiValues = collectCptUiCodesExcludingZeros(page);
-	logger.info("CPT UI values after sync (excluding 00000): {}", uiValues);
+	// 1) Delete ALL existing UI CPT codes (portal EM, zeros, leftovers)
+	PlayTestActionLog.update("validateCPT", "clear all UI CPT rows then fill from JSON");
+	clearAllCptRows(page);
+	Set<String> uiValues = collectCptUiCodes(page);
+	logger.info("CPT UI values after clear: {}", uiValues);
+	if (!uiValues.isEmpty()) {
+	    logger.warn("CPT clear incomplete — leftover UI codes {}: will still try to add JSON codes", uiValues);
+	}
+
+	// 2) Add only JSON CPT codes onto blank rows
+	for (String expected : orderedCodes) {
+	    String norm = normalizeCptCode(expected);
+	    uiValues = collectCptUiCodes(page);
+	    if (uiValues.contains(norm)) {
+		PlayTestActionLog.skip("CPT", "already present '" + expected + "'");
+		continue;
+	    }
+	    if (!addCptOnEmptyRow(page, expected)) {
+		logger.warn("CPT '{}' not added from JSON", expected);
+	    }
+	}
+
+	uiValues = collectCptUiCodes(page);
+	logger.info("CPT UI values after clear+fill: {}", uiValues);
 	if (!uiValues.equals(expectedNormalized)) {
 	    String message = "CPT UI does not match JSON after sync. UI=" + uiValues + " JSON="
 		    + expectedNormalized + " — continuing so user can Submit/Skip";
 	    logger.warn(message);
 	    PlayTestActionLog.skip("validateCPT verification", message);
 	} else {
-	    PlayTestActionLog.update("validateCPT verification", "UI matches JSON (00000 ignored): " + orderedCodes);
+	    PlayTestActionLog.update("validateCPT verification", "UI exactly matches JSON: " + orderedCodes);
 	}
 
-	// 4) Fill row details for each JSON CPT that exists on the UI
+	// 3) Fill row details for each JSON CPT that exists on the UI
 	for (Map<String, Object> entry : cptEntries) {
 	    String code = str(entry, "code");
 	    if (code == null) {
@@ -1222,72 +1239,62 @@ public class Service {
     }
 
     /**
-     * Walk CPT rows in order: keep {@code 00000}; overwrite each other populated row with the
-     * next JSON code; when a blank row is reached, add remaining JSON codes there.
+     * Deletes every populated CPT row on the UI (including {@code 00000} and portal EM).
+     * Used before refilling strictly from JSON.
      */
-    private void applyJsonCptsOverExistingRows(Page page, List<String> orderedCodes) throws InterruptedException {
-	int jsonIdx = 0;
-	int rowIdx = 0;
-	while (jsonIdx < orderedCodes.size()) {
+    private void clearAllCptRows(Page page) throws InterruptedException {
+	for (int pass = 0; pass < 8; pass++) {
 	    Locator rows = page.locator(CPT_ROWS);
-	    int rowCount = rows.count();
-	    if (rowIdx >= rowCount) {
-		if (!addCptOnEmptyRow(page, orderedCodes.get(jsonIdx))) {
-		    break;
-		}
-		jsonIdx++;
-		rowIdx++;
-		continue;
+	    Set<String> before = collectCptUiCodes(page);
+	    logger.info("CPT clear-all pass {}: UI={}", pass + 1, before);
+	    if (before.isEmpty()) {
+		logger.info("CPT clear complete — UI has no populated CPT rows");
+		return;
 	    }
 
-	    Locator row = rows.nth(rowIdx);
-	    String value = readCptCode(row);
-	    if (isZeroCpt(value)) {
-		logger.info("CPT row {} is '{}' — keeping as-is", rowIdx, normalizeCptCode(value));
-		PlayTestActionLog.skip("CPT row", "keeping zeros '" + value + "'");
-		rowIdx++;
-		continue;
-	    }
-
-	    String expected = orderedCodes.get(jsonIdx);
-	    String want = normalizeCptCode(expected);
-	    if (!value.isBlank()) {
-		String current = normalizeCptCode(value);
-		if (want.equals(current)) {
-		    logger.info("CPT row {} already '{}' — leaving in place for JSON", rowIdx, expected);
-		    PlayTestActionLog.skip("CPT", "already '" + expected + "' on row");
-		} else {
-		    logger.info("Overwriting CPT row {} '{}' with JSON '{}'", rowIdx, value, expected);
-		    PlayTestActionLog.update("CPT row", "'" + value + "' -> '" + expected + "'");
-		    boolean ok = select2TypeAndChoose(page, row, expected, "CPT overwrite " + expected);
-		    Thread.sleep(400);
-		    String after = "";
-		    try {
-			after = normalizeCptCode(readCptCode(page.locator(CPT_ROWS).nth(rowIdx)));
-		    } catch (Exception ignored) {
+	    boolean deletedAny = false;
+	    for (int i = rows.count() - 1; i >= 0; i--) {
+		try {
+		    rows = page.locator(CPT_ROWS);
+		    if (i >= rows.count()) {
+			continue;
 		    }
-		    if (!ok || !want.equals(after)) {
-			logger.warn("CPT overwrite of '{}' with '{}' did not stick (now '{}')", value, expected, after);
+		    Locator row = rows.nth(i);
+		    String value = readCptCode(row);
+		    if (value.isBlank()) {
+			continue;
 		    }
+		    String norm = normalizeCptCode(value);
+		    PlayTestActionLog.delete("CPT row", value + " (clear-all before JSON fill)");
+		    logger.info("Deleting CPT '{}' — clear-all before JSON fill (reason '{}')", value,
+			    DISABLE_REASON_NRC);
+		    dismissSelect2(page);
+		    Locator removeBtn = findCptRemoveButton(row);
+		    if (removeBtn == null) {
+			logger.warn("No removeCharge button for CPT {}", value);
+			continue;
+		    }
+		    removeBtn.scrollIntoViewIfNeeded();
+		    removeBtn.click(new Locator.ClickOptions().setForce(true));
+		    Thread.sleep(500);
+		    if (!confirmDisableChargeDialog(page, DISABLE_REASON_NRC)) {
+			logger.warn("Disable charge dialog not confirmed for CPT {}", value);
+		    }
+		    page.waitForTimeout(400);
+		    if (!collectCptUiCodes(page).contains(norm)) {
+			logger.info("CPT '{}' deleted successfully", value);
+			deletedAny = true;
+		    }
+		} catch (Exception e) {
+		    logger.warn("CPT clear-all failed: {}", e.getMessage());
 		}
-		jsonIdx++;
-		rowIdx++;
-		continue;
 	    }
-
-	    logger.info("CPT row {} is empty — adding remaining JSON starting with '{}'", rowIdx, expected);
-	    PlayTestActionLog.add("CPT", expected);
-	    boolean ok = select2TypeAndChoose(page, row, expected, "CPT " + expected);
-	    Thread.sleep(400);
-	    if (ok && collectCptUiCodes(page).contains(want)) {
-		logger.info("CPT '{}' added from JSON", expected);
-		waitForEmptyCptRow(page, 5_000);
-	    } else {
-		logger.warn("CPT '{}' not present in UI after add attempt", expected);
-		PlayTestActionLog.skip("CPT " + expected, "select2 did not commit");
+	    if (!deletedAny) {
+		logger.warn("CPT clear-all pass {}: no rows removed; remaining={}", pass + 1,
+			collectCptUiCodes(page));
+		break;
 	    }
-	    jsonIdx++;
-	    rowIdx++;
+	    Thread.sleep(300);
 	}
     }
 

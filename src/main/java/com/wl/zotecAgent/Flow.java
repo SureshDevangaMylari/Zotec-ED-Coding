@@ -329,14 +329,7 @@ public class Flow {
 	logger.info("validateCPT entries: {}", cptEntries);
 	logger.info("validateICD codes: {}", icdList);
 
-	// Order matches PlayTest2: CPT → ED → ICD → accident/billing extras → Issue/RFI
-	s.validateCPT(page, cptEntries, icdList);
-
-	if (dismissDataLockedIfPresent(page)) {
-	    logger.info("Data Locked after CPT — OK clicked, move to next patient");
-	    return true;
-	}
-
+	// Order: ED → clear-all CPT + fill from JSON → ICD → billing extras → Issue/RFI
 	ps.click(page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("ED")), "clicking ED");
 	Thread.sleep(2000);
 	try {
@@ -367,6 +360,13 @@ public class Flow {
 
 	if (dismissDataLockedIfPresent(page)) {
 	    logger.info("Data Locked after ED submit — OK clicked, move to next patient");
+	    return true;
+	}
+
+	s.validateCPT(page, cptEntries, icdList);
+
+	if (dismissDataLockedIfPresent(page)) {
+	    logger.info("Data Locked after CPT — OK clicked, move to next patient");
 	    return true;
 	}
 
