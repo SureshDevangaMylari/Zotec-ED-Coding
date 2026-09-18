@@ -19,7 +19,6 @@ import org.springframework.stereotype.Service;
 
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.BrowserContext;
-import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
 
@@ -34,7 +33,7 @@ public class BotService {
     @Value("${flow.agent-id:698ae5c9b0bf82d7668c29c8}")
     private String defaultAgentId;
 
-    /** Empty = default OS Chrome profile (extensions / cookies from normal Chrome). */
+    /** Empty = default OS Chrome profile (source for sync / Windows CDP). */
     @Value("${zotec.chrome.user-data-dir:}")
     private String chromeUserDataDir;
 
@@ -144,15 +143,15 @@ public class BotService {
     }
 
     /**
-     * Windows: detached Chrome + CDP (launchPersistentContext hangs on real User Data).
-     * Linux/macOS: Playwright launchPersistentContext (Chrome ignores CDP on default profile).
-     * Then caller continues to Zotec login / Flow.
+     * Windows: real Chrome User Data + detached CDP.
+     * Linux: sync real profile → non-default agent dir + CDP (persistent context hangs on
+     * ~/.config/google-chrome; CDP is ignored on that default path).
      */
     private void launchChromeWithUserProfile() throws Exception {
-	Path userData = resolveChromeUserDataDir();
-	if (!Files.isDirectory(userData)) {
+	Path sourceUserData = resolveChromeUserDataDir();
+	if (!Files.isDirectory(sourceUserData)) {
 	    throw new IllegalStateException(
-		    "Chrome user-data-dir not found: " + userData.toAbsolutePath()
+		    "Chrome user-data-dir not found: " + sourceUserData.toAbsolutePath()
 			    + " — set zotec.chrome.user-data-dir in application.properties");
 	}
 
@@ -161,20 +160,86 @@ public class BotService {
 		: "Default";
 	Path chromeExe = resolveChromeExecutable();
 
-	ensureChromeClosedForProfileLaunch(userData);
+	ensureChromeClosedForProfileLaunch(sourceUserData);
 
 	if (isWindows()) {
-	    launchWindowsViaCdp(chromeExe, userData, profile);
+	    launchViaCdp(chromeExe, sourceUserData, profile, "Windows");
 	} else {
-	    launchViaPersistentContext(chromeExe, userData, profile);
+	    requireDisplayForLinux();
+	    Path agentUserData = resolveLinuxAgentUserDataDir();
+	    syncChromeProfileForLinux(sourceUserData, agentUserData);
+	    ensureChromeClosedForProfileLaunch(agentUserData);
+	    launchViaCdp(chromeExe, agentUserData, profile, "Linux");
 	}
     }
 
+    private void requireDisplayForLinux() {
+	String display = System.getenv("DISPLAY");
+	if (display == null || display.isBlank()) {
+	    throw new IllegalStateException(
+		    "DISPLAY is not set. On Ubuntu the bot needs a GUI/VNC session "
+			    + "(e.g. export DISPLAY=:0). Playwright deps alone are not enough.");
+	}
+	log.info("Linux DISPLAY={}", display);
+    }
+
     /**
-     * Windows-only: Start-Process Chrome with remote debugging, then connectOverCDP.
-     * Does not use launchPersistentContext (that call never returns on real User Data).
+     * Non-default profile path so Chrome enables --remote-debugging-port on Linux.
      */
-    private void launchWindowsViaCdp(Path chromeExe, Path userData, String profile) throws Exception {
+    private Path resolveLinuxAgentUserDataDir() throws Exception {
+	String home = System.getProperty("user.home", ".");
+	Path agent = Paths.get(home, ".config", "zotec-agent-chrome");
+	Files.createDirectories(agent);
+	return agent;
+    }
+
+    /**
+     * Copy cookies/extensions/session from normal Chrome into the agent profile dir.
+     */
+    private void syncChromeProfileForLinux(Path source, Path dest) throws Exception {
+	log.info("Syncing Chrome profile {} → {} (so extensions/session work with CDP)",
+		source.toAbsolutePath(), dest.toAbsolutePath());
+	ProcessBuilder pb = new ProcessBuilder(
+		"rsync", "-a",
+		"--delete",
+		"--exclude=SingletonLock",
+		"--exclude=SingletonCookie",
+		"--exclude=SingletonSocket",
+		"--exclude=Crashpad",
+		"--exclude=BrowserMetrics",
+		"--exclude=ShaderCache",
+		"--exclude=GrShaderCache",
+		"--exclude=GraphiteDawnCache",
+		source.toAbsolutePath() + "/",
+		dest.toAbsolutePath() + "/");
+	pb.redirectErrorStream(true);
+	Process p = pb.start();
+	boolean finished = p.waitFor(10, TimeUnit.MINUTES);
+	if (!finished) {
+	    p.destroyForcibly();
+	    throw new IllegalStateException("Timed out syncing Chrome profile with rsync");
+	}
+	if (p.exitValue() != 0) {
+	    // Fallback: cp -a if rsync missing
+	    log.warn("rsync exit={} — trying cp -a", p.exitValue());
+	    ProcessBuilder cp = new ProcessBuilder("bash", "-lc",
+		    "mkdir -p '" + dest.toAbsolutePath() + "' && "
+			    + "cp -a '" + source.toAbsolutePath() + "/.' '" + dest.toAbsolutePath() + "/'");
+	    cp.redirectErrorStream(true);
+	    Process cpProc = cp.start();
+	    if (!cpProc.waitFor(10, TimeUnit.MINUTES) || cpProc.exitValue() != 0) {
+		throw new IllegalStateException(
+			"Could not sync Chrome profile (install rsync: sudo apt-get install -y rsync)");
+	    }
+	}
+	Files.deleteIfExists(dest.resolve("SingletonLock"));
+	Files.deleteIfExists(dest.resolve("SingletonCookie"));
+	Files.deleteIfExists(dest.resolve("SingletonSocket"));
+	log.info("Chrome profile sync complete");
+    }
+
+    private void launchViaCdp(Path chromeExe, Path userData, String profile, String osLabel)
+	    throws Exception {
 	int port = chromeDebuggingPort > 0 ? chromeDebuggingPort : 9222;
 	String cdpUrl = "http://127.0.0.1:" + port;
 
@@ -192,43 +257,23 @@ public class BotService {
 	chromeArgs.add("--start-maximized");
 	chromeArgs.add("--no-first-run");
 	chromeArgs.add("--no-default-browser-check");
+	if (!isWindows()) {
+	    chromeArgs.add("--disable-dev-shm-usage");
+	    chromeArgs.add("--no-sandbox");
+	}
 
-	log.info("Starting Windows Chrome (detached + CDP) exe={} userDataDir={} profile={} cdp={}",
-		chromeExe, userData.toAbsolutePath(), profile, cdpUrl);
-	startChromeDetachedWindows(chromeExe, chromeArgs);
+	log.info("Starting {} Chrome (detached + CDP) exe={} userDataDir={} profile={} cdp={}",
+		osLabel, chromeExe, userData.toAbsolutePath(), profile, cdpUrl);
 
-	waitForCdpReady(cdpUrl, 45_000);
+	if (isWindows()) {
+	    startChromeDetachedWindows(chromeExe, chromeArgs);
+	} else {
+	    startChromeDetachedUnix(chromeExe, chromeArgs);
+	}
+
+	waitForCdpReady(cdpUrl, 60_000);
 	attachPlaywrightToCdp(cdpUrl);
 	log.info("Chrome attached via CDP — continuing to Zotec login / Flow");
-    }
-
-    private void launchViaPersistentContext(Path chromeExe, Path userData, String profile) {
-	List<String> args = new ArrayList<>();
-	args.add("--profile-directory=" + profile);
-	args.add("--start-maximized");
-	args.add("--no-first-run");
-	args.add("--no-default-browser-check");
-	args.add("--disable-dev-shm-usage");
-	args.add("--no-sandbox");
-
-	log.info("Starting Chrome via Playwright persistent context exe={} userDataDir={} profile={}",
-		chromeExe, userData.toAbsolutePath(), profile);
-
-	BrowserType.LaunchPersistentContextOptions opts = new BrowserType.LaunchPersistentContextOptions()
-		.setHeadless(false)
-		.setExecutablePath(chromeExe)
-		.setIgnoreDefaultArgs(List.of("--disable-extensions"))
-		.setArgs(args)
-		.setViewportSize(null);
-
-	context = playwright.chromium().launchPersistentContext(userData, opts);
-	browser = context.browser();
-	if (!context.pages().isEmpty()) {
-	    page = context.pages().get(0);
-	} else {
-	    page = context.newPage();
-	}
-	log.info("Chrome ready (pages={}) — continuing to Zotec login / Flow", context.pages().size());
     }
 
     private void startChromeDetachedWindows(Path chromeExe, List<String> chromeArgs) throws Exception {
@@ -248,6 +293,27 @@ public class BotService {
 	Process launcher = pb.start();
 	launcher.waitFor(20, TimeUnit.SECONDS);
 	chromeProcess = null;
+    }
+
+    private void startChromeDetachedUnix(Path chromeExe, List<String> chromeArgs) throws Exception {
+	List<String> cmd = new ArrayList<>();
+	cmd.add("setsid");
+	cmd.add(chromeExe.toAbsolutePath().toString());
+	cmd.addAll(chromeArgs);
+	ProcessBuilder pb = new ProcessBuilder(cmd);
+	pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+	pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+	try {
+	    chromeProcess = pb.start();
+	} catch (Exception e) {
+	    List<String> fallback = new ArrayList<>();
+	    fallback.add(chromeExe.toAbsolutePath().toString());
+	    fallback.addAll(chromeArgs);
+	    chromeProcess = new ProcessBuilder(fallback)
+		    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+		    .redirectError(ProcessBuilder.Redirect.DISCARD)
+		    .start();
+	}
     }
 
     private void attachPlaywrightToCdp(String cdpUrl) {
@@ -320,6 +386,11 @@ public class BotService {
 	    if (stopRequested) {
 		throw new IllegalStateException("Stop requested while waiting for Chrome CDP");
 	    }
+	    if (chromeProcess != null && !chromeProcess.isAlive()) {
+		log.warn("Chrome process exited early (code={}) while waiting for CDP",
+			chromeProcess.exitValue());
+		chromeProcess = null;
+	    }
 	    if (isCdpReady(cdpUrl)) {
 		return;
 	    }
@@ -330,7 +401,7 @@ public class BotService {
 	    Thread.sleep(500);
 	}
 	throw new IllegalStateException("Timed out waiting for Chrome CDP at " + cdpUrl
-		+ ". Close Chrome fully and retry.");
+		+ ". Check DISPLAY, close Chrome, and retry.");
     }
 
     private Path resolveChromeExecutable() {
@@ -491,17 +562,27 @@ public class BotService {
 	} finally {
 	    chromeProcess = null;
 	}
-	if (!isWindows()) {
-	    return;
-	}
 	try {
-	    Process kill = new ProcessBuilder("taskkill", "/F", "/IM", "chrome.exe", "/T")
-		    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-		    .redirectError(ProcessBuilder.Redirect.DISCARD)
-		    .start();
-	    kill.waitFor(10, TimeUnit.SECONDS);
+	    if (isWindows()) {
+		Process kill = new ProcessBuilder("taskkill", "/F", "/IM", "chrome.exe", "/T")
+			.redirectOutput(ProcessBuilder.Redirect.DISCARD)
+			.redirectError(ProcessBuilder.Redirect.DISCARD)
+			.start();
+		kill.waitFor(10, TimeUnit.SECONDS);
+	    } else {
+		for (String pattern : List.of("chrome", "google-chrome", "chromium")) {
+		    try {
+			new ProcessBuilder("pkill", "-f", pattern)
+				.redirectOutput(ProcessBuilder.Redirect.DISCARD)
+				.redirectError(ProcessBuilder.Redirect.DISCARD)
+				.start()
+				.waitFor(5, TimeUnit.SECONDS);
+		    } catch (Exception ignored) {
+		    }
+		}
+	    }
 	} catch (Exception e) {
-	    log.debug("taskkill on destroy: {}", e.getMessage());
+	    log.debug("kill chrome on destroy: {}", e.getMessage());
 	}
     }
 }
