@@ -48,6 +48,7 @@ public class CodingFormValidationService {
 	updatePatient(extractedData);
 	updateProfile(extractedData);
 	updateEncounterNumber(extractedData);
+	// Header Service Location / POS only — never CPT-row controls (those fill in validateCPT after ED)
 	updateServiceLocation(extractedData);
 	updatePlaceOfService(extractedData);
 	updateDepartment(extractedData);
@@ -57,7 +58,7 @@ public class CodingFormValidationService {
 	updateProviders(extractedData);
 	updateDisposition(extractedData);
 	// ICD codes and accident date/type are filled later by Flow/FlowText:
-	// CPT → validateICD (once) → updateBillingExtras. Do not fill diagnoses here.
+	// ED → CPT (incl. row SL/POS) → validateICD → updateBillingExtras.
 	log.info("Coding form validation complete");
     }
 
@@ -437,6 +438,11 @@ public class CodingFormValidationService {
 	return null;
     }
 
+    /**
+     * Patient/coding-header Service Location only ({@code #s2id_serviceLocation}).
+     * Does not click label-based or CPT-row Service Location — those are filled later in
+     * {@link Service#validateCPT}.
+     */
     private void updateServiceLocation(Map<String, Object> data) {
 	try {
 	    Map<String, Object> batchInfo = asMap(data.get("batch_info"));
@@ -447,19 +453,21 @@ public class CodingFormValidationService {
 		return;
 	    }
 
-	    Locator choice = firstPresent(SERVICE_LOCATION_HEADER_CHOICE, SERVICE_LOCATION_CHOICE);
-	    if (choice == null) {
-		PlayTestActionLog.skip("Service Location", "field not on form");
+	    Locator header = page.locator(SERVICE_LOCATION_HEADER).first();
+	    if (header.count() == 0) {
+		PlayTestActionLog.skip("Service Location", "header #s2id_serviceLocation not on form");
+		return;
+	    }
+	    Locator choice = page.locator(SERVICE_LOCATION_HEADER_CHOICE).first();
+	    if (choice.count() == 0) {
+		PlayTestActionLog.skip("Service Location", "header select2 choice not on form");
 		return;
 	    }
 
-	    String current = getPageText(SERVICE_LOCATION_CHOSEN);
-	    if (current == null || isBlankPageValue(current)) {
-		try {
-		    current = choice.locator("xpath=ancestor::div[contains(@class,'select2-container')][1]//span[contains(@class,'select2-chosen')]")
-			    .first().innerText();
-		} catch (Exception ignored) {
-		}
+	    String current = "";
+	    try {
+		current = page.locator(SERVICE_LOCATION_HEADER_CHOSEN).first().innerText();
+	    } catch (Exception ignored) {
 	    }
 	    if (valuesMatch(current, serviceLocation)) {
 		PlayTestActionLog.skip("Service Location", current, serviceLocation);
@@ -467,6 +475,8 @@ public class CodingFormValidationService {
 	    }
 
 	    PlayTestActionLog.update("Service Location", "'" + current + "' -> '" + serviceLocation + "'");
+	    log.info("Setting header Service Location to '{}' (was '{}') — not touching CPT rows",
+		    serviceLocation, current);
 	    dismissSelect2();
 	    choice.scrollIntoViewIfNeeded();
 	    choice.click(new Locator.ClickOptions().setForce(true));
@@ -495,8 +505,9 @@ public class CodingFormValidationService {
     }
 
     /**
-     * Fill header Place of Service from JSON when empty and editable.
-     * Skip when disabled (auto from Service Location) or already matching.
+     * Patient/coding-header Place of Service only ({@code #s2id_placeOfService}).
+     * Skips charge/CPT POS ({@code chargeplaceOfServicever}, label POS in charge panel) —
+     * those are filled later in {@link Service#validateCPT}.
      */
     private void updatePlaceOfService(Map<String, Object> data) {
 	String pos = null;
@@ -512,21 +523,7 @@ public class CodingFormValidationService {
 
 	    Locator container = page.locator(PLACE_OF_SERVICE).first();
 	    if (container.count() == 0) {
-		container = page.locator(PLACE_OF_SERVICE_ANY).first();
-	    }
-	    if (container.count() == 0) {
-		container = page.locator(PLACE_OF_SERVICE_BY_LABEL).first();
-	    }
-	    if (container.count() == 0) {
-		// Charge override POS (auto-generated select2 id next to chargeplaceOfServicever)
-		Locator chargeInput = page.locator(PLACE_OF_SERVICE_CHARGE_INPUT).first();
-		if (chargeInput.count() > 0) {
-		    container = chargeInput.locator(
-			    "xpath=preceding-sibling::div[contains(@class,'select2-container')][1]").first();
-		}
-	    }
-	    if (container.count() == 0) {
-		PlayTestActionLog.skip("POS", "field not on form");
+		PlayTestActionLog.skip("POS", "header #s2id_placeOfService not on form (CPT POS deferred to validateCPT)");
 		return;
 	    }
 
@@ -564,26 +561,25 @@ public class CodingFormValidationService {
 
 	    if (posMatches(current, pos)) {
 		PlayTestActionLog.skip("POS", current, pos);
-		log.info("POS already '{}' (matches '{}')", current, pos);
+		log.info("Header POS already '{}' (matches '{}')", current, pos);
 		return;
 	    }
 
 	    // JSON wins over disabled/auto POS (e.g. UI locked at 23, JSON wants 24)
 	    if (disabled) {
-		log.info("POS disabled with '{}' — force-enable and set JSON '{}'", current, pos);
+		log.info("Header POS disabled with '{}' — force-enable and set JSON '{}'", current, pos);
 		tryForceEnablePlaceOfService();
 	    }
 
-	    // Empty/wrong — set from JSON
 	    PlayTestActionLog.update("POS", "'" + current + "' -> '" + pos + "'");
-	    log.info("Setting POS to '{}' (was '{}')", pos, current);
+	    log.info("Setting header POS to '{}' (was '{}') — not touching CPT/charge POS", pos, current);
 	    dismissSelect2();
 	    Locator choice = page.locator(PLACE_OF_SERVICE_CHOICE).first();
 	    if (choice.count() == 0) {
 		choice = container.locator("a.select2-choice").first();
 	    }
 	    if (choice.count() == 0) {
-		PlayTestActionLog.skip("POS", "Select2 choice not found");
+		PlayTestActionLog.skip("POS", "Select2 choice not found on header");
 		return;
 	    }
 	    choice.scrollIntoViewIfNeeded();
@@ -592,7 +588,7 @@ public class CodingFormValidationService {
 
 	    Locator search = visibleSelect2Search();
 	    if (search == null) {
-		log.warn("POS Select2 search not visible — trying jQuery/select2 fallback for '{}'", pos);
+		log.warn("Header POS Select2 search not visible — trying jQuery/select2 fallback for '{}'", pos);
 		dismissSelect2();
 		tryForceEnablePlaceOfService();
 		setPosViaJavascript(pos);
@@ -622,7 +618,7 @@ public class CodingFormValidationService {
 		results.first().click(new Locator.ClickOptions().setForce(true));
 	    } else if (!selectFirstSelect2Result()) {
 		dismissSelect2();
-		log.warn("POS no select2 match — trying jQuery/select2 fallback for '{}'", pos);
+		log.warn("Header POS no select2 match — trying jQuery/select2 fallback for '{}'", pos);
 		setPosViaJavascript(pos);
 		return;
 	    }
@@ -633,7 +629,7 @@ public class CodingFormValidationService {
 	    } catch (Exception ignored) {
 	    }
 	    if (!posMatches(after, pos)) {
-		log.warn("POS UI still '{}' after click — JS fallback for '{}'", after, pos);
+		log.warn("Header POS UI still '{}' after click — JS fallback for '{}'", after, pos);
 		setPosViaJavascript(pos);
 	    }
 	} catch (Exception e) {

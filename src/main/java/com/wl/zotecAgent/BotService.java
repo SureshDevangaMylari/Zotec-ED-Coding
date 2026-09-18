@@ -1,5 +1,6 @@
 package com.wl.zotecAgent;
 
+import java.io.File;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.nio.file.Files;
@@ -9,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +42,10 @@ public class BotService {
 
     @Value("${zotec.chrome.debugging-port:9222}")
     private int chromeDebuggingPort;
+
+    /** Optional override, e.g. /usr/bin/google-chrome-stable on Ubuntu. */
+    @Value("${zotec.chrome.executable:}")
+    private String chromeExecutable;
 
     private Thread botThread;
     private volatile boolean running = false;
@@ -215,13 +221,26 @@ public class BotService {
 	    return;
 	}
 
+	// Linux: detach via setsid so Chrome is not a stuck JVM child
 	List<String> cmd = new ArrayList<>();
+	cmd.add("setsid");
 	cmd.add(chromeExe.toAbsolutePath().toString());
 	cmd.addAll(chromeArgs);
 	ProcessBuilder pb = new ProcessBuilder(cmd);
 	pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
 	pb.redirectError(ProcessBuilder.Redirect.DISCARD);
-	chromeProcess = pb.start();
+	try {
+	    chromeProcess = pb.start();
+	} catch (Exception setsidMissing) {
+	    // setsid may be absent — fall back to direct start
+	    List<String> fallback = new ArrayList<>();
+	    fallback.add(chromeExe.toAbsolutePath().toString());
+	    fallback.addAll(chromeArgs);
+	    chromeProcess = new ProcessBuilder(fallback)
+		    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+		    .redirectError(ProcessBuilder.Redirect.DISCARD)
+		    .start();
+	}
     }
 
     private void attachPlaywrightToCdp(String cdpUrl) {
@@ -244,21 +263,29 @@ public class BotService {
      * open port 9222 (Connection refused → bot times out and exits).
      */
     private void ensureChromeClosedForProfileLaunch(Path userData) throws InterruptedException {
-	if (!isWindows()) {
-	    log.warn("Close any running Chrome that uses {} before Start Agent", userData);
-	    return;
-	}
-	log.info("Closing existing chrome.exe so profile can start with CDP (User Data stays intact)");
+	log.info("Closing existing Chrome so profile can start with CDP (profile data stays intact)");
 	try {
-	    Process kill = new ProcessBuilder("taskkill", "/F", "/IM", "chrome.exe", "/T")
-		    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-		    .redirectError(ProcessBuilder.Redirect.DISCARD)
-		    .start();
-	    kill.waitFor(15, TimeUnit.SECONDS);
+	    if (isWindows()) {
+		Process kill = new ProcessBuilder("taskkill", "/F", "/IM", "chrome.exe", "/T")
+			.redirectOutput(ProcessBuilder.Redirect.DISCARD)
+			.redirectError(ProcessBuilder.Redirect.DISCARD)
+			.start();
+		kill.waitFor(15, TimeUnit.SECONDS);
+	    } else {
+		for (String pattern : List.of("chrome", "google-chrome", "chromium", "chromium-browser")) {
+		    try {
+			new ProcessBuilder("pkill", "-f", pattern)
+				.redirectOutput(ProcessBuilder.Redirect.DISCARD)
+				.redirectError(ProcessBuilder.Redirect.DISCARD)
+				.start()
+				.waitFor(5, TimeUnit.SECONDS);
+		    } catch (Exception ignored) {
+		    }
+		}
+	    }
 	} catch (Exception e) {
-	    log.debug("taskkill chrome: {}", e.getMessage());
+	    log.debug("kill chrome: {}", e.getMessage());
 	}
-	// Drop stale lock so the next Chrome can open the profile
 	try {
 	    Files.deleteIfExists(userData.resolve("SingletonLock"));
 	    Files.deleteIfExists(userData.resolve("SingletonCookie"));
@@ -267,11 +294,6 @@ public class BotService {
 	    log.debug("clear Singleton*: {}", e.getMessage());
 	}
 	Thread.sleep(2000);
-    }
-
-    private static boolean isWindows() {
-	String os = System.getProperty("os.name", "");
-	return os.toLowerCase().contains("win");
     }
 
     private boolean isCdpReady(String cdpUrl) {
@@ -317,38 +339,109 @@ public class BotService {
     }
 
     private Path resolveChromeExecutable() {
+	if (chromeExecutable != null && !chromeExecutable.isBlank()) {
+	    Path configured = Paths.get(chromeExecutable.trim());
+	    if (Files.isRegularFile(configured) || Files.isExecutable(configured)) {
+		return configured;
+	    }
+	    throw new IllegalStateException("zotec.chrome.executable not found: " + configured.toAbsolutePath());
+	}
+
 	List<Path> candidates = new ArrayList<>();
-	String pf = System.getenv("ProgramFiles");
-	String pf86 = System.getenv("ProgramFiles(x86)");
-	String local = System.getenv("LOCALAPPDATA");
-	if (pf != null) {
-	    candidates.add(Paths.get(pf, "Google", "Chrome", "Application", "chrome.exe"));
+	if (isWindows()) {
+	    String pf = System.getenv("ProgramFiles");
+	    String pf86 = System.getenv("ProgramFiles(x86)");
+	    String local = System.getenv("LOCALAPPDATA");
+	    if (pf != null) {
+		candidates.add(Paths.get(pf, "Google", "Chrome", "Application", "chrome.exe"));
+	    }
+	    if (pf86 != null) {
+		candidates.add(Paths.get(pf86, "Google", "Chrome", "Application", "chrome.exe"));
+	    }
+	    if (local != null) {
+		candidates.add(Paths.get(local, "Google", "Chrome", "Application", "chrome.exe"));
+	    }
+	    candidates.add(Paths.get("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"));
+	    candidates.add(Paths.get("C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"));
+	} else if (isMac()) {
+	    candidates.add(Paths.get("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"));
+	    candidates.add(Paths.get("/Applications/Chromium.app/Contents/MacOS/Chromium"));
+	} else {
+	    // Ubuntu / Linux
+	    candidates.add(Paths.get("/usr/bin/google-chrome"));
+	    candidates.add(Paths.get("/usr/bin/google-chrome-stable"));
+	    candidates.add(Paths.get("/usr/bin/chromium-browser"));
+	    candidates.add(Paths.get("/usr/bin/chromium"));
+	    candidates.add(Paths.get("/snap/bin/chromium"));
+	    String pathEnv = System.getenv("PATH");
+	    if (pathEnv != null) {
+		for (String dir : pathEnv.split(Pattern.quote(File.pathSeparator))) {
+		    if (dir.isBlank()) {
+			continue;
+		    }
+		    candidates.add(Paths.get(dir, "google-chrome"));
+		    candidates.add(Paths.get(dir, "google-chrome-stable"));
+		    candidates.add(Paths.get(dir, "chromium-browser"));
+		    candidates.add(Paths.get(dir, "chromium"));
+		}
+	    }
 	}
-	if (pf86 != null) {
-	    candidates.add(Paths.get(pf86, "Google", "Chrome", "Application", "chrome.exe"));
-	}
-	if (local != null) {
-	    candidates.add(Paths.get(local, "Google", "Chrome", "Application", "chrome.exe"));
-	}
-	candidates.add(Paths.get("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"));
-	candidates.add(Paths.get("C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"));
 	for (Path p : candidates) {
 	    if (Files.isRegularFile(p)) {
 		return p;
 	    }
 	}
-	throw new IllegalStateException("chrome.exe not found — install Google Chrome or set path manually");
+	throw new IllegalStateException(
+		"Chrome/Chromium executable not found — install Google Chrome or set zotec.chrome.executable");
     }
 
+    /**
+     * Default OS Chrome profile directory:
+     * Windows {@code %LOCALAPPDATA%\Google\Chrome\User Data},
+     * Linux {@code ~/.config/google-chrome} (or chromium),
+     * macOS {@code ~/Library/Application Support/Google/Chrome}.
+     */
     private Path resolveChromeUserDataDir() {
 	if (chromeUserDataDir != null && !chromeUserDataDir.isBlank()) {
 	    return Paths.get(chromeUserDataDir.trim());
 	}
-	String localAppData = System.getenv("LOCALAPPDATA");
-	if (localAppData == null || localAppData.isBlank()) {
-	    localAppData = System.getProperty("user.home") + "\\AppData\\Local";
+	String home = System.getProperty("user.home");
+	if (home == null || home.isBlank()) {
+	    home = ".";
 	}
-	return Paths.get(localAppData, "Google", "Chrome", "User Data");
+	List<Path> candidates = new ArrayList<>();
+	if (isWindows()) {
+	    String localAppData = System.getenv("LOCALAPPDATA");
+	    if (localAppData == null || localAppData.isBlank()) {
+		localAppData = home + File.separator + "AppData" + File.separator + "Local";
+	    }
+	    candidates.add(Paths.get(localAppData, "Google", "Chrome", "User Data"));
+	} else if (isMac()) {
+	    candidates.add(Paths.get(home, "Library", "Application Support", "Google", "Chrome"));
+	    candidates.add(Paths.get(home, "Library", "Application Support", "Chromium"));
+	} else {
+	    // Linux (Ubuntu VM): never use Windows AppData paths
+	    candidates.add(Paths.get(home, ".config", "google-chrome"));
+	    candidates.add(Paths.get(home, ".config", "chromium"));
+	    candidates.add(Paths.get(home, "snap", "chromium", "common", "chromium"));
+	}
+	for (Path p : candidates) {
+	    if (Files.isDirectory(p)) {
+		return p;
+	    }
+	}
+	// Return the primary expected path so the error message is actionable
+	return candidates.get(0);
+    }
+
+    private static boolean isWindows() {
+	String os = System.getProperty("os.name", "");
+	return os.toLowerCase().contains("win");
+    }
+
+    private static boolean isMac() {
+	String os = System.getProperty("os.name", "");
+	return os.toLowerCase().contains("mac");
     }
 
     /** Stop Playwright / Chrome; does not clear browsing data. */
@@ -415,17 +508,27 @@ public class BotService {
 	} finally {
 	    chromeProcess = null;
 	}
-	// Detached Windows Chrome is not a Java child — taskkill so Stop/exit actually closes it
-	if (isWindows()) {
-	    try {
+	try {
+	    if (isWindows()) {
 		Process kill = new ProcessBuilder("taskkill", "/F", "/IM", "chrome.exe", "/T")
 			.redirectOutput(ProcessBuilder.Redirect.DISCARD)
 			.redirectError(ProcessBuilder.Redirect.DISCARD)
 			.start();
 		kill.waitFor(10, TimeUnit.SECONDS);
-	    } catch (Exception e) {
-		log.debug("taskkill on destroy: {}", e.getMessage());
+	    } else {
+		for (String pattern : List.of("chrome", "google-chrome", "chromium", "chromium-browser")) {
+		    try {
+			new ProcessBuilder("pkill", "-f", pattern)
+				.redirectOutput(ProcessBuilder.Redirect.DISCARD)
+				.redirectError(ProcessBuilder.Redirect.DISCARD)
+				.start()
+				.waitFor(5, TimeUnit.SECONDS);
+		    } catch (Exception ignored) {
+		    }
+		}
 	    }
+	} catch (Exception e) {
+	    log.debug("kill chrome on destroy: {}", e.getMessage());
 	}
     }
 }

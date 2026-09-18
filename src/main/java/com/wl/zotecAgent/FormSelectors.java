@@ -46,13 +46,16 @@ public final class FormSelectors {
     // Search input scoped to open dropdown (avoids matching hidden inputs from other select2s)
     public static final String ENCOUNTER_SEARCH_INPUT = XP + "//div[contains(@class,'select2-drop') and not(contains(@class,'select2-display-none'))]//input[contains(@class,'select2-input')]";
 
-    // Service Location — header #s2id_serviceLocation when present; else label-based (e.g. charge override)
+    // Service Location — patient/coding HEADER only (#s2id_serviceLocation).
+    // Do not use label xpath here during header fill — that can hit CPT-row Service Location.
     public static final String SERVICE_LOCATION_HEADER = "#s2id_serviceLocation";
     public static final String SERVICE_LOCATION_HEADER_CHOICE = SERVICE_LOCATION_HEADER + " .select2-choice";
+    public static final String SERVICE_LOCATION_HEADER_CHOSEN = SERVICE_LOCATION_HEADER + " .select2-chosen";
+    /** Label-based (may match CPT rows) — use only when intentionally targeting non-header controls. */
     public static final String SERVICE_LOCATION_CHOSEN = XP + "//label[contains(text(),'Service Location')]/following-sibling::div[contains(@class,'select2')]//span[contains(@class,'select2-chosen')]";
     public static final String SERVICE_LOCATION_CHOICE = XP + "//label[contains(text(),'Service Location')]/following-sibling::div[contains(@class,'select2')]//a[contains(@class,'select2-choice')]";
 
-    // POS — often auto-set from Service Location and disabled; locate by id or label
+    // POS — patient/coding HEADER only (#s2id_placeOfService). Charge/CPT POS is filled later in Service.validateCPT.
     public static final String PLACE_OF_SERVICE = "#s2id_placeOfService";
     public static final String PLACE_OF_SERVICE_CHOSEN = PLACE_OF_SERVICE + " .select2-chosen";
     public static final String PLACE_OF_SERVICE_CHOICE = PLACE_OF_SERVICE + " .select2-choice";
