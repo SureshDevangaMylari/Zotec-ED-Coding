@@ -1,6 +1,9 @@
 package com.wl.zotecAgent;
 
 import java.net.URI;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -9,6 +12,7 @@ import com.google.gson.JsonObject;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.CDPSession;
 import com.microsoft.playwright.Page;
+import com.microsoft.playwright.options.Cookie;
 
 /**
  * Clears browser data equivalent to Chrome "Clear browsing data" with time range
@@ -26,7 +30,123 @@ public final class BrowserCacheClearer {
     /** {@code since: 0} = All time (same as Chrome Clear browsing data). */
     private static final double SINCE_ALL_TIME = 0;
 
+    private static final String ZOTEC_DOMAIN_MARKER = "zotecpartners.com";
+
     private BrowserCacheClearer() {
+    }
+
+    /**
+     * Clears <b>only</b> Zotec portal cookies / origin storage (not other Chrome sites).
+     * Call before Zotec login and before closing the browser so the next Start Agent
+     * always sees the credential page for the active Spring profile.
+     */
+    public static void clearZotecSiteOnly(BrowserContext context, Page page, String portalUrl, String when) {
+	if (context == null) {
+	    log.info("Zotec cookie clear skipped at {} — no context", when);
+	    return;
+	}
+
+	int removed = 0;
+	try {
+	    List<Cookie> cookies = context.cookies();
+	    for (Cookie c : cookies) {
+		if (c == null || c.domain == null) {
+		    continue;
+		}
+		if (!c.domain.toLowerCase().contains(ZOTEC_DOMAIN_MARKER)) {
+		    continue;
+		}
+		try {
+		    BrowserContext.ClearCookiesOptions opts = new BrowserContext.ClearCookiesOptions()
+			    .setName(c.name)
+			    .setDomain(c.domain);
+		    if (c.path != null && !c.path.isBlank()) {
+			opts.setPath(c.path);
+		    }
+		    context.clearCookies(opts);
+		    removed++;
+		} catch (Exception e) {
+		    log.debug("Could not clear cookie {}@{}: {}", c.name, c.domain, e.getMessage());
+		}
+	    }
+	    // Also clear by common parent domain (covers host-only variants)
+	    try {
+		context.clearCookies(new BrowserContext.ClearCookiesOptions().setDomain(ZOTEC_DOMAIN_MARKER));
+	    } catch (Exception ignored) {
+	    }
+	    try {
+		context.clearCookies(new BrowserContext.ClearCookiesOptions().setDomain("." + ZOTEC_DOMAIN_MARKER));
+	    } catch (Exception ignored) {
+	    }
+	    log.info("Cleared {} Zotec cookie(s) at {}", removed, when);
+	} catch (Exception e) {
+	    log.warn("Zotec Playwright cookie clear failed at {}: {}", when, e.getMessage());
+	}
+
+	if (page == null) {
+	    return;
+	}
+	try {
+	    if (page.isClosed()) {
+		return;
+	    }
+	} catch (Exception e) {
+	    return;
+	}
+
+	CDPSession cdp = null;
+	try {
+	    cdp = context.newCDPSession(page);
+	    for (String origin : zotecOrigins(portalUrl, page)) {
+		try {
+		    JsonObject params = new JsonObject();
+		    params.addProperty("origin", origin);
+		    params.addProperty("storageTypes", "cookies,local_storage,indexeddb,cache_storage,service_workers");
+		    cdp.send("Storage.clearDataForOrigin", params);
+		    log.info("Cleared Zotec origin storage {} at {}", origin, when);
+		} catch (Exception e) {
+		    log.debug("Storage.clearDataForOrigin {} failed at {}: {}", origin, when, e.getMessage());
+		}
+	    }
+	} catch (Exception e) {
+	    log.warn("Zotec CDP origin clear failed at {}: {}", when, e.getMessage());
+	} finally {
+	    if (cdp != null) {
+		try {
+		    cdp.detach();
+		} catch (Exception ignored) {
+		}
+	    }
+	}
+    }
+
+    private static Set<String> zotecOrigins(String portalUrl, Page page) {
+	Set<String> origins = new LinkedHashSet<>();
+	origins.add("https://coding.zotecpartners.com");
+	origins.add("https://portal.zotecpartners.com");
+	addOrigin(origins, portalUrl);
+	try {
+	    addOrigin(origins, page.url());
+	} catch (Exception ignored) {
+	}
+	return origins;
+    }
+
+    private static void addOrigin(Set<String> origins, String url) {
+	if (url == null || url.isBlank()) {
+	    return;
+	}
+	try {
+	    URI uri = URI.create(url.trim());
+	    if (uri.getScheme() == null || uri.getAuthority() == null) {
+		return;
+	    }
+	    if (!uri.getAuthority().toLowerCase().contains(ZOTEC_DOMAIN_MARKER)) {
+		return;
+	    }
+	    origins.add(uri.getScheme() + "://" + uri.getAuthority());
+	} catch (Exception ignored) {
+	}
     }
 
     /**

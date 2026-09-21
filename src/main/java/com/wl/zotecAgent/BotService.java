@@ -47,6 +47,9 @@ public class BotService {
     @Value("${zotec.chrome.executable:}")
     private String chromeExecutable;
 
+    @Value("${zotec.portal.URL:https://coding.zotecpartners.com/}")
+    private String zotecPortalUrl;
+
     private Thread botThread;
     private volatile boolean running = false;
     private volatile boolean stopRequested = false;
@@ -255,7 +258,7 @@ public class BotService {
 	chromeArgs.add("--user-data-dir=" + userData.toAbsolutePath());
 	chromeArgs.add("--profile-directory=" + profile);
 	chromeArgs.add("--start-maximized");
-	chromeArgs.add("--no-first-run");
+	//chromeArgs.add("--no-first-run");
 	chromeArgs.add("--no-default-browser-check");
 	if (!isWindows()) {
 	    chromeArgs.add("--disable-dev-shm-usage");
@@ -503,6 +506,7 @@ public class BotService {
 	log.info("Bot STOP requested");
 	stopRequested = true;
 	try {
+	    clearZotecCookiesBeforeClose("stopBot");
 	    if (context != null) {
 		context.close();
 	    } else if (browser != null) {
@@ -530,6 +534,7 @@ public class BotService {
 
     void cleanup() {
 	try {
+	    clearZotecCookiesBeforeClose("cleanup");
 	    if (context != null) {
 		context.close();
 	    } else if (browser != null) {
@@ -546,6 +551,24 @@ public class BotService {
 	    context = null;
 	    browser = null;
 	    playwright = null;
+	}
+    }
+
+    /** Drop Zotec session from the Chrome profile before the browser process exits. */
+    private void clearZotecCookiesBeforeClose(String when) {
+	try {
+	    if (context == null) {
+		return;
+	    }
+	    Page p = page;
+	    if (p == null || p.isClosed()) {
+		if (!context.pages().isEmpty()) {
+		    p = context.pages().get(0);
+		}
+	    }
+	    BrowserCacheClearer.clearZotecSiteOnly(context, p, zotecPortalUrl, when);
+	} catch (Exception e) {
+	    log.debug("clearZotecCookiesBeforeClose at {}: {}", when, e.getMessage());
 	}
     }
 

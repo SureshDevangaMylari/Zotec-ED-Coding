@@ -70,61 +70,48 @@ public class ZotecService {
     }
 
     /**
-     * Opens the Zotec portal. If the session from the Chrome profile is already on
-     * Coding Workfile ({@code Select client(s)} visible), skips credentials.
-     * If the login page is shown, runs the normal E-Mail → Password → Verify flow.
+     * Clears Zotec site cookies, then opens the portal and signs in with the active
+     * Spring profile credentials. Always forces the login page (no session reuse).
      *
-     * @return {@code true} if credentials were entered; {@code false} if already logged in
+     * @return {@code true} if credentials were entered
      */
     boolean login(Page page) throws Exception {
-	PlaywrightService ps = new PlaywrightService(page);
-
-	// Existing Chrome tab already on workfile with Select client(s)
-	if (isSelectClientsVisible(page, 1500)) {
-	    log.info("Already logged in — Select client(s) visible; skipping Zotec login");
-	    return false;
-	}
-
 	if (zotecPortalURL == null || zotecPortalURL.isBlank()) {
 	    throw new IllegalStateException("zotec.portal.URL must be set in application.properties");
 	}
-	log.info("Opening Zotec portal {}", zotecPortalURL);
-	page.navigate(zotecPortalURL);
-	try {
-	    page.waitForLoadState();
-	} catch (Exception ignored) {
-	    // continue with visibility checks
-	}
-
-	if (isSelectClientsVisible(page, 8000)) {
-	    log.info("Session restored — Select client(s) visible; skipping Zotec login");
-	    return false;
-	}
-
-	Locator workfile = page.getByText("Coding Workfile");
-	if (isVisible(workfile, 4000) && !isLoginFormVisible(page, 500)) {
-	    log.info("Session active — opening Coding Workfile (skip credential login)");
-	    ps.click(workfile, "click coding workfle");
-	    if (isSelectClientsVisible(page, 10000)) {
-		return false;
-	    }
-	}
-
-	if (!isLoginFormVisible(page, 8000)) {
-	    // Last chance: workfile may have finished loading
-	    if (isSelectClientsVisible(page, 5000)) {
-		log.info("Select client(s) appeared; skipping Zotec login");
-		return false;
-	    }
-	    throw new IllegalStateException(
-		    "Zotec portal did not show login form or Select client(s) — check URL/session");
-	}
-
 	if (portalUsername == null || portalUsername.isBlank() || portalPassword == null
 		|| portalPassword.isBlank()) {
 	    throw new IllegalStateException(
 		    "zotec.portal.username / zotec.portal.password must be set in application.properties");
 	}
+
+	PlaywrightService ps = new PlaywrightService(page);
+	BrowserCacheClearer.clearZotecSiteOnly(page.context(), page, zotecPortalURL, "before-zotec-login");
+
+	log.info("Opening Zotec portal {} (after clearing Zotec cookies)", zotecPortalURL);
+	page.navigate(zotecPortalURL);
+	try {
+	    page.waitForLoadState();
+	} catch (Exception ignored) {
+	}
+
+	// If a stale in-memory tab still looks logged in, clear again and reload once
+	if (isSelectClientsVisible(page, 2000) || (isVisible(page.getByText("Coding Workfile"), 1500)
+		&& !isLoginFormVisible(page, 500))) {
+	    log.info("Stale Zotec session UI still visible — clearing cookies again and reloading");
+	    BrowserCacheClearer.clearZotecSiteOnly(page.context(), page, zotecPortalURL, "before-zotec-login-retry");
+	    page.navigate(zotecPortalURL);
+	    try {
+		page.waitForLoadState();
+	    } catch (Exception ignored) {
+	    }
+	}
+
+	if (!isLoginFormVisible(page, 15000)) {
+	    throw new IllegalStateException(
+		    "Zotec login form not shown after clearing site cookies — check portal URL / network");
+	}
+
 	log.info("Login page detected — signing in as {}", portalUsername);
 	ps.fill(page.getByRole(AriaRole.TEXTBOX, new Page.GetByRoleOptions().setName("E-Mail Address")),
 		portalUsername, "entering username");
