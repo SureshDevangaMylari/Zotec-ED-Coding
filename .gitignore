@@ -30,9 +30,6 @@ hs_err_pid*
 replay_pid*
 /target/
 
-# Ignore entire folders
-resources/pdf/
-resources/jsonfolder/
 
 #It has secret keys
 src/main/java/wl/ai/ragICD/LLMService.java
