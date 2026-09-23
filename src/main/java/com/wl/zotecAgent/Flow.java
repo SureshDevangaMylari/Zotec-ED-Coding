@@ -230,6 +230,7 @@ public class Flow {
 	toggle.waitFor(new Locator.WaitForOptions()
 		.setState(com.microsoft.playwright.options.WaitForSelectorState.VISIBLE)
 		.setTimeout(30_000));
+	logSelectClientsToggleEnabledState(toggle);
 
 	if (isClientDropdownOpen(page)) {
 	    logger.info("Select client(s) #myDropdown already open — skipping toggle click");
@@ -269,6 +270,35 @@ public class Flow {
 
 	ps.waitForElement(page.locator(CLIENT_CHECKBOX_XPATH).first(), "waiting for client checkboxes");
 	Thread.sleep(500);
+    }
+
+    /**
+     * Logs whether the Select client(s) dropdown toggle is enabled or disabled
+     * (Playwright {@code isEnabled}/{@code isDisabled}, plus {@code disabled} /
+     * {@code aria-disabled} / CSS {@code disabled} class).
+     */
+    private void logSelectClientsToggleEnabledState(Locator toggle) {
+	try {
+	    boolean playwrightEnabled = toggle.isEnabled();
+	    boolean playwrightDisabled = toggle.isDisabled();
+	    String disabledAttr = toggle.getAttribute("disabled");
+	    String ariaDisabled = toggle.getAttribute("aria-disabled");
+	    String cls = toggle.getAttribute("class");
+	    boolean classDisabled = cls != null && cls.toLowerCase().contains("disabled");
+	    boolean attrDisabled = disabledAttr != null;
+	    boolean ariaIsDisabled = "true".equalsIgnoreCase(ariaDisabled);
+	    boolean effectivelyDisabled = playwrightDisabled || attrDisabled || ariaIsDisabled
+		    || classDisabled;
+	    String state = effectivelyDisabled ? "DISABLED" : "ENABLED";
+	    logger.info(
+		    "Select client(s) dropdown button is {} (playwrightEnabled={}, playwrightDisabled={},"
+			    + " disabledAttr={}, aria-disabled={}, classDisabled={}, class='{}')",
+		    state, playwrightEnabled, playwrightDisabled, disabledAttr, ariaDisabled,
+		    classDisabled, cls);
+	} catch (Exception e) {
+	    logger.warn("Could not read Select client(s) dropdown enabled/disabled state: {}",
+		    e.getMessage());
+	}
     }
 
     private boolean waitForClientDropdownOpen(Page page, double timeoutMs) {
