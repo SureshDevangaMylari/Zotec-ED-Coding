@@ -258,7 +258,7 @@ public class BotService {
 	chromeArgs.add("--user-data-dir=" + userData.toAbsolutePath());
 	chromeArgs.add("--profile-directory=" + profile);
 	chromeArgs.add("--start-maximized");
-	//chromeArgs.add("--no-first-run");
+	chromeArgs.add("--no-first-run");
 	chromeArgs.add("--no-default-browser-check");
 	if (!isWindows()) {
 	    chromeArgs.add("--disable-dev-shm-usage");
