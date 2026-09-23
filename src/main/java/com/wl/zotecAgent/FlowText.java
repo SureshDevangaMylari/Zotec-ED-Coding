@@ -35,6 +35,11 @@ public class FlowText {
 
     private static final String CLIENT_CHECKBOX_XPATH =
 	    "//*[@class='badge badge-info pull-right ng-binding']/preceding-sibling::input";
+    /** Bootstrap/Angular toggle: {@code <a class="dropdown-toggle" ng-click="refreshLocationFilter()">}. */
+    private static final String SELECT_CLIENTS_TOGGLE =
+	    "a.dropdown-toggle[ng-click*='refreshLocationFilter']";
+    /** Dropdown panel shown when {@code li.dropdown} has class {@code open}. */
+    private static final String CLIENT_DROPDOWN_OPEN = "li.dropdown.open #myDropdown";
     private static final String NO_MORE_REPORTS =
 	    "There are no more reports to view based on your filters";
     private static final String REPORT_COMPLETED = "This report has been completed.";
@@ -185,16 +190,15 @@ public class FlowText {
     }
 
     /**
-     * Prefer an existing tab that already shows Select client(s) (restored session);
+     * Prefer an existing tab that already shows the Select client(s) toggle;
      * otherwise open a new page for login / navigate.
      */
     private Page resolveWorkfilePage(BrowserContext context) {
 	for (Page existing : context.pages()) {
 	    try {
-		Locator link = existing.getByRole(AriaRole.LINK,
-			new Page.GetByRoleOptions().setName("Select client(s)"));
-		if (link.count() > 0 && link.first().isVisible()) {
-		    logger.info("Reusing existing tab with Select client(s) visible");
+		Locator toggle = existing.locator(SELECT_CLIENTS_TOGGLE).first();
+		if (toggle.count() > 0 && toggle.isVisible()) {
+		    logger.info("Reusing existing tab with Select client(s) toggle visible");
 		    existing.bringToFront();
 		    return existing;
 		}
@@ -205,27 +209,87 @@ public class FlowText {
 	return context.newPage();
     }
 
-    /** Open Select client(s) panel and wait for checkboxes. */
     /**
-     * Open Select client(s) panel and wait for checkboxes.
-     * Select client(s) toggles: if an earlier click left the panel closed, click again
-     * so the bot (not the user) re-opens it before checkbox selection.
+     * Opens the Bootstrap dropdown via the real toggle
+     * {@code <a class="dropdown-toggle" ng-click="refreshLocationFilter()">Select client(s)</a>}
+     * and waits until {@code #myDropdown} is visible under {@code li.dropdown.open}.
+     * Does not blindly double-click (that toggles the panel closed).
      */
     private void openClientSelector(PlaywrightService ps, Page page) throws InterruptedException {
-	Thread.sleep(1000);
-	Locator link = page.getByRole(AriaRole.LINK, new Page.GetByRoleOptions().setName("Select client(s)"));
+	page.bringToFront();
+	Thread.sleep(500);
 
-	ps.click(link, "opening client options (click 1)");
-	Thread.sleep(2000);
+	Locator toggle = page.locator(SELECT_CLIENTS_TOGGLE).first();
+	toggle.waitFor(new Locator.WaitForOptions()
+		.setState(com.microsoft.playwright.options.WaitForSelectorState.VISIBLE)
+		.setTimeout(30_000));
 
-	if (!clientCheckboxesVisible(page)) {
-	    logger.info("Client checkboxes not visible after first Select client(s) click — clicking again to open panel");
-	    ps.click(link, "opening client options (click 2 — re-open)");
-	    Thread.sleep(2000);
+	if (isClientDropdownOpen(page)) {
+	    logger.info("Select client(s) #myDropdown already open — skipping toggle click");
+	} else {
+	    boolean opened = false;
+	    for (int attempt = 1; attempt <= 3 && !opened; attempt++) {
+		logger.info("Clicking Select client(s) dropdown-toggle (attempt {})", attempt);
+		toggle.scrollIntoViewIfNeeded();
+		try {
+		    // Native click so Angular ng-click="refreshLocationFilter()" runs
+		    toggle.click(new Locator.ClickOptions().setTimeout(10_000));
+		} catch (Exception e) {
+		    logger.warn("Normal click failed ({}) — force click", e.getMessage());
+		    toggle.click(new Locator.ClickOptions().setForce(true).setTimeout(10_000));
+		}
+
+		opened = waitForClientDropdownOpen(page, 5_000);
+		if (!opened) {
+		    // Fallback: DOM click (still fires Angular handlers on this <a>)
+		    Object js = page.evaluate("() => {"
+			    + "  const a = document.querySelector(\"a.dropdown-toggle[ng-click*='refreshLocationFilter']\");"
+			    + "  if (!a) return 'missing';"
+			    + "  a.click();"
+			    + "  return 'clicked';"
+			    + "}");
+		    logger.info("JS toggle click result={} (attempt {})", js, attempt);
+		    opened = waitForClientDropdownOpen(page, 5_000);
+		}
+		if (!opened && attempt < 3) {
+		    // Only retry if still closed — never click again while open (would close it)
+		    Thread.sleep(1000);
+		}
+	    }
+	    if (!opened) {
+		throw new IllegalStateException(
+			"Select client(s) dropdown did not open (#myDropdown / li.dropdown.open)");
+	    }
+	    logger.info("Select client(s) dropdown is open (#myDropdown visible)");
 	}
 
 	ps.waitForElement(page.locator(CLIENT_CHECKBOX_XPATH).first(), "waiting for client checkboxes");
-	Thread.sleep(1000);
+	Thread.sleep(500);
+    }
+
+    private boolean waitForClientDropdownOpen(Page page, double timeoutMs) {
+	try {
+	    page.locator(CLIENT_DROPDOWN_OPEN).first()
+		    .waitFor(new Locator.WaitForOptions()
+			    .setState(com.microsoft.playwright.options.WaitForSelectorState.VISIBLE)
+			    .setTimeout(timeoutMs));
+	    return true;
+	} catch (Exception e) {
+	    return isClientDropdownOpen(page);
+	}
+    }
+
+    private boolean isClientDropdownOpen(Page page) {
+	try {
+	    Locator open = page.locator(CLIENT_DROPDOWN_OPEN).first();
+	    if (open.count() > 0 && open.isVisible()) {
+		return true;
+	    }
+	    Locator panel = page.locator("#myDropdown").first();
+	    return panel.count() > 0 && panel.isVisible();
+	} catch (Exception e) {
+	    return false;
+	}
     }
 
     private boolean clientCheckboxesVisible(Page page) {
