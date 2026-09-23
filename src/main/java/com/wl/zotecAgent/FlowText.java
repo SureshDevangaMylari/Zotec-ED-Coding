@@ -210,10 +210,10 @@ public class FlowText {
     }
 
     /**
-     * Opens Select client(s). Prefers a real toggle click (Angular
-     * {@code refreshLocationFilter}), then force-opens Bootstrap state if ZTEC
-     * blocks the click path: add {@code open} on {@code li.dropdown}, show
-     * {@code #myDropdown}. Re-asserts open while waiting for checkboxes.
+     * Opens the Bootstrap dropdown via the real toggle
+     * {@code <a class="dropdown-toggle" ng-click="refreshLocationFilter()">Select client(s)</a>}
+     * and waits until {@code #myDropdown} is visible under {@code li.dropdown.open}.
+     * Does not blindly double-click (that toggles the panel closed).
      */
     private void openClientSelector(PlaywrightService ps, Page page) throws InterruptedException {
 	page.bringToFront();
@@ -239,7 +239,7 @@ public class FlowText {
 		    toggle.click(new Locator.ClickOptions().setForce(true).setTimeout(10_000));
 		}
 
-		opened = waitForClientDropdownOpen(page, 3_000);
+		opened = waitForClientDropdownOpen(page, 5_000);
 		if (!opened) {
 		    // Fallback: DOM click (still fires Angular handlers on this <a>)
 		    Object js = page.evaluate("() => {"
@@ -249,13 +249,7 @@ public class FlowText {
 			    + "  return 'clicked';"
 			    + "}");
 		    logger.info("JS toggle click result={} (attempt {})", js, attempt);
-		    opened = waitForClientDropdownOpen(page, 2_000);
-		}
-		if (!opened) {
-		    // ZTEC workaround: force Bootstrap open without relying on the click path
-		    Object forced = forceOpenClientDropdown(page);
-		    logger.info("Force-open Select client(s) result={} (attempt {})", forced, attempt);
-		    opened = waitForClientDropdownOpen(page, 3_000);
+		    opened = waitForClientDropdownOpen(page, 5_000);
 		}
 		if (!opened && attempt < 3) {
 		    // Only retry if still closed — never click again while open (would close it)
@@ -269,69 +263,8 @@ public class FlowText {
 	    logger.info("Select client(s) dropdown is open (#myDropdown visible)");
 	}
 
-	waitForClientCheckboxesWithForceOpen(ps, page);
-	Thread.sleep(500);
-    }
-
-    /**
-     * Force Bootstrap dropdown open for ZTEC interference: {@code li.dropdown.open},
-     * show {@code #myDropdown}, and invoke Angular {@code refreshLocationFilter} when available.
-     */
-    private Object forceOpenClientDropdown(Page page) {
-	return page.evaluate("() => {"
-		+ "  const a = document.querySelector(\"a.dropdown-toggle[ng-click*='refreshLocationFilter']\");"
-		+ "  if (!a) return 'missing-toggle';"
-		+ "  const li = a.closest('li.dropdown');"
-		+ "  if (!li) return 'missing-li';"
-		+ "  const panel = document.getElementById('myDropdown') || li.querySelector('#myDropdown');"
-		+ "  if (!panel) return 'missing-panel';"
-		+ "  try {"
-		+ "    if (window.angular) {"
-		+ "      const el = window.angular.element(a);"
-		+ "      const scope = el.scope && el.scope();"
-		+ "      if (scope && typeof scope.refreshLocationFilter === 'function') {"
-		+ "        if (scope.$apply) {"
-		+ "          scope.$apply(function() { scope.refreshLocationFilter(); });"
-		+ "        } else {"
-		+ "          scope.refreshLocationFilter();"
-		+ "        }"
-		+ "      }"
-		+ "    }"
-		+ "  } catch (e) { /* Angular may be unavailable */ }"
-		+ "  li.classList.add('open');"
-		+ "  a.setAttribute('aria-expanded', 'true');"
-		+ "  panel.style.display = 'block';"
-		+ "  panel.style.visibility = 'visible';"
-		+ "  if (panel.classList) panel.classList.add('open');"
-		+ "  return 'forced-open';"
-		+ "}");
-    }
-
-    /**
-     * Wait for client checkboxes; if ZTEC closes the panel, re-force open and retry.
-     */
-    private void waitForClientCheckboxesWithForceOpen(PlaywrightService ps, Page page)
-	    throws InterruptedException {
-	for (int attempt = 1; attempt <= 5; attempt++) {
-	    if (!isClientDropdownOpen(page)) {
-		Object forced = forceOpenClientDropdown(page);
-		logger.info("Re-force-open Select client(s) before checkbox wait (attempt {}) result={}",
-			attempt, forced);
-		Thread.sleep(300);
-	    }
-	    try {
-		ps.waitForElement(page.locator(CLIENT_CHECKBOX_XPATH).first(),
-			"waiting for client checkboxes");
-		if (clientCheckboxesVisible(page)) {
-		    return;
-		}
-	    } catch (Exception e) {
-		logger.warn("Client checkboxes not ready (attempt {}): {}", attempt, e.getMessage());
-	    }
-	    forceOpenClientDropdown(page);
-	    Thread.sleep(500);
-	}
 	ps.waitForElement(page.locator(CLIENT_CHECKBOX_XPATH).first(), "waiting for client checkboxes");
+	Thread.sleep(500);
     }
 
     private boolean waitForClientDropdownOpen(Page page, double timeoutMs) {
