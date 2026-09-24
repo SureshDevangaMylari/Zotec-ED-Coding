@@ -76,6 +76,8 @@ public class MoveToIssueService {
 	    return true;
 	}
 
+	ZtecVerifierGate.dismissYesIDidIfPresent(page);
+
 	Locator btn = page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Move to Issue"));
 	if (btn.count() == 0 || !btn.first().isVisible()) {
 	    btn = page.locator("button:has-text('Move to Issue')");

@@ -90,6 +90,8 @@ public class RfiService {
 	    return true;
 	}
 
+	ZtecVerifierGate.dismissYesIDidIfPresent(page);
+
 	Locator btn = page.getByRole(AriaRole.BUTTON,
 		new Page.GetByRoleOptions().setName("RFI").setExact(true));
 	if (btn.count() == 0 || !btn.first().isVisible()) {

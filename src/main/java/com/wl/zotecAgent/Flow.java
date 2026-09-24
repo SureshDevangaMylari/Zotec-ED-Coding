@@ -588,6 +588,8 @@ public class Flow {
 	s.validateICD(icdList, page);
 	new CodingFormValidationService(page).updateBillingExtras(patientInfo);
 	IssueOrRfiApplier.applyAfterCodingFill(page, resumePayload);
+	// Reveal Submit/Skip for the upcoming manual wait if ZTEC verifier is showing
+	ZtecVerifierGate.dismissYesIDidIfPresent(page);
 
 	if (dismissDataLockedIfPresent(page)) {
 	    logger.info("Data Locked after ICD/billing — OK clicked, move to next patient");
@@ -652,6 +654,8 @@ public class Flow {
 	}
 
 	dismissDataLockedIfPresent(page);
+	// Uncover Submit/Skip for the user if ZTEC verifier is covering them
+	ZtecVerifierGate.dismissYesIDidIfPresent(page);
 
 	logger.info(
 		"Waiting for USER to click Submit or Skip manually — bot will not click either button");
@@ -662,6 +666,8 @@ public class Flow {
 		Thread.sleep(2000);
 		continue;
 	    }
+	    // Re-dismiss if ZTEC shows "Yes, I did" again while waiting
+	    ZtecVerifierGate.dismissYesIDidIfPresent(page);
 	    if (hasNoMoreReportsMessage(page)) {
 		logger.info("No more reports after manual Submit/Skip");
 		return SkipAdvanceResult.NO_MORE_REPORTS;
@@ -692,8 +698,14 @@ public class Flow {
 	}
 
 	dismissDataLockedIfPresent(page);
+	ZtecVerifierGate.dismissYesIDidIfPresent(page);
 
 	Locator skipBtn = page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Skip"));
+	if (skipBtn.count() == 0 || !skipBtn.first().isEnabled()) {
+	    // Overlay may have been covering Skip — dismiss again and re-check once
+	    ZtecVerifierGate.dismissYesIDidIfPresent(page);
+	    skipBtn = page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Skip"));
+	}
 	if (skipBtn.count() == 0 || !skipBtn.first().isEnabled()) {
 	    if (hasNoMoreReportsMessage(page)) {
 		return SkipAdvanceResult.NO_MORE_REPORTS;

@@ -30,6 +30,9 @@ public final class IssueOrRfiApplier {
 	    return;
 	}
 
+	// Uncover Move to Issue / RFI if ZTEC verifier overlay is showing
+	ZtecVerifierGate.dismissYesIDidIfPresent(page);
+
 	if (move && rfi) {
 	    log.warn("JSON has both issue and rfi — applying Move to Issue only (RFI button would be disabled)");
 	    PlayTestActionLog.skip("RFI", "skipped because issue is also present");
