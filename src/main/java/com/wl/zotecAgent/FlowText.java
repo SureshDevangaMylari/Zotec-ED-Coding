@@ -210,10 +210,10 @@ public class FlowText {
     }
 
     /**
-     * Opens the Bootstrap dropdown via the real toggle
-     * {@code <a class="dropdown-toggle" ng-click="refreshLocationFilter()">Select client(s)</a>}
-     * and waits until {@code #myDropdown} is visible under {@code li.dropdown.open}.
-     * Does not blindly double-click (that toggles the panel closed).
+     * Opens Select client(s). Prefers a real toggle click (Angular
+     * {@code refreshLocationFilter}); force-opens Bootstrap state only if ZTEC
+     * blocks the click path. If already open/stuck open, force-closes first so
+     * we never click the toggle while force-stuck open.
      */
     private void openClientSelector(PlaywrightService ps, Page page) throws InterruptedException {
 	page.bringToFront();
@@ -225,47 +225,139 @@ public class FlowText {
 		.setTimeout(30_000));
 	logSelectClientsToggleEnabledState(toggle);
 
+	// Before opening again: if already open (incl. force-stuck), close first —
+	// do not click the toggle while stuck open (would fight Bootstrap / hit ACL).
 	if (isClientDropdownOpen(page)) {
-	    logger.info("Select client(s) #myDropdown already open — skipping toggle click");
-	} else {
-	    boolean opened = false;
-	    for (int attempt = 1; attempt <= 3 && !opened; attempt++) {
-		logger.info("Clicking Select client(s) dropdown-toggle (attempt {})", attempt);
-		toggle.scrollIntoViewIfNeeded();
-		try {
-		    // Native click so Angular ng-click="refreshLocationFilter()" runs
-		    toggle.click(new Locator.ClickOptions().setTimeout(10_000));
-		} catch (Exception e) {
-		    logger.warn("Normal click failed ({}) — force click", e.getMessage());
-		    toggle.click(new Locator.ClickOptions().setForce(true).setTimeout(10_000));
-		}
-
-		opened = waitForClientDropdownOpen(page, 5_000);
-		if (!opened) {
-		    // Fallback: DOM click (still fires Angular handlers on this <a>)
-		    Object js = page.evaluate("() => {"
-			    + "  const a = document.querySelector(\"a.dropdown-toggle[ng-click*='refreshLocationFilter']\");"
-			    + "  if (!a) return 'missing';"
-			    + "  a.click();"
-			    + "  return 'clicked';"
-			    + "}");
-		    logger.info("JS toggle click result={} (attempt {})", js, attempt);
-		    opened = waitForClientDropdownOpen(page, 5_000);
-		}
-		if (!opened && attempt < 3) {
-		    // Only retry if still closed — never click again while open (would close it)
-		    Thread.sleep(1000);
-		}
-	    }
-	    if (!opened) {
-		throw new IllegalStateException(
-			"Select client(s) dropdown did not open (#myDropdown / li.dropdown.open)");
-	    }
-	    logger.info("Select client(s) dropdown is open (#myDropdown visible)");
+	    logger.info("Select client(s) already open — force-closing before a clean open");
+	    forceCloseClientDropdown(page);
+	    Thread.sleep(300);
 	}
 
-	ps.waitForElement(page.locator(CLIENT_CHECKBOX_XPATH).first(), "waiting for client checkboxes");
+	boolean opened = false;
+	for (int attempt = 1; attempt <= 3 && !opened; attempt++) {
+	    logger.info("Clicking Select client(s) dropdown-toggle (attempt {})", attempt);
+	    toggle.scrollIntoViewIfNeeded();
+	    try {
+		// Prefer real click so Angular ng-click="refreshLocationFilter()" runs
+		toggle.click(new Locator.ClickOptions().setTimeout(10_000));
+	    } catch (Exception e) {
+		logger.warn("Normal click failed ({}) — force click", e.getMessage());
+		toggle.click(new Locator.ClickOptions().setForce(true).setTimeout(10_000));
+	    }
+
+	    opened = waitForClientDropdownOpen(page, 3_000);
+	    if (!opened) {
+		Object js = page.evaluate("() => {"
+			+ "  const a = document.querySelector(\"a.dropdown-toggle[ng-click*='refreshLocationFilter']\");"
+			+ "  if (!a) return 'missing';"
+			+ "  a.click();"
+			+ "  return 'clicked';"
+			+ "}");
+		logger.info("JS toggle click result={} (attempt {})", js, attempt);
+		opened = waitForClientDropdownOpen(page, 2_000);
+	    }
+	    if (!opened) {
+		// ZTEC fallback only: force Bootstrap open without relying on the click path
+		Object forced = forceOpenClientDropdown(page);
+		logger.info("Force-open Select client(s) result={} (attempt {})", forced, attempt);
+		opened = waitForClientDropdownOpen(page, 3_000);
+	    }
+	    if (!opened && attempt < 3) {
+		Thread.sleep(1000);
+	    }
+	}
+	if (!opened) {
+	    throw new IllegalStateException(
+		    "Select client(s) dropdown did not open (#myDropdown / li.dropdown.open)");
+	}
+	logger.info("Select client(s) dropdown is open (#myDropdown visible)");
+
+	waitForClientCheckboxesWithForceOpen(ps, page);
 	Thread.sleep(500);
+    }
+
+    /**
+     * Force Bootstrap dropdown open for ZTEC interference: {@code li.dropdown.open},
+     * show {@code #myDropdown}, and invoke Angular {@code refreshLocationFilter} when available.
+     */
+    private Object forceOpenClientDropdown(Page page) {
+	return page.evaluate("() => {"
+		+ "  const a = document.querySelector(\"a.dropdown-toggle[ng-click*='refreshLocationFilter']\");"
+		+ "  if (!a) return 'missing-toggle';"
+		+ "  const li = a.closest('li.dropdown');"
+		+ "  if (!li) return 'missing-li';"
+		+ "  const panel = document.getElementById('myDropdown') || li.querySelector('#myDropdown');"
+		+ "  if (!panel) return 'missing-panel';"
+		+ "  try {"
+		+ "    if (window.angular) {"
+		+ "      const el = window.angular.element(a);"
+		+ "      const scope = el.scope && el.scope();"
+		+ "      if (scope && typeof scope.refreshLocationFilter === 'function') {"
+		+ "        if (scope.$apply) {"
+		+ "          scope.$apply(function() { scope.refreshLocationFilter(); });"
+		+ "        } else {"
+		+ "          scope.refreshLocationFilter();"
+		+ "        }"
+		+ "      }"
+		+ "    }"
+		+ "  } catch (e) { /* Angular may be unavailable */ }"
+		+ "  li.classList.add('open');"
+		+ "  a.setAttribute('aria-expanded', 'true');"
+		+ "  panel.style.display = 'block';"
+		+ "  panel.style.visibility = 'visible';"
+		+ "  if (panel.classList) panel.classList.add('open');"
+		+ "  return 'forced-open';"
+		+ "}");
+    }
+
+    /**
+     * Force-close after Apply / before re-open: remove {@code open}, clear
+     * {@code #myDropdown} inline display/visibility, set {@code aria-expanded=false}.
+     */
+    private Object forceCloseClientDropdown(Page page) {
+	Object result = page.evaluate("() => {"
+		+ "  const a = document.querySelector(\"a.dropdown-toggle[ng-click*='refreshLocationFilter']\");"
+		+ "  const li = a ? a.closest('li.dropdown') : document.querySelector('li.dropdown:has(#myDropdown)');"
+		+ "  const panel = document.getElementById('myDropdown')"
+		+ "      || (li && li.querySelector('#myDropdown'));"
+		+ "  if (li) li.classList.remove('open');"
+		+ "  if (a) a.setAttribute('aria-expanded', 'false');"
+		+ "  if (panel) {"
+		+ "    panel.style.display = 'none';"
+		+ "    panel.style.visibility = 'hidden';"
+		+ "    if (panel.classList) panel.classList.remove('open');"
+		+ "  }"
+		+ "  return panel ? 'forced-closed' : 'missing-panel';"
+		+ "}");
+	logger.info("Force-close Select client(s) result={}", result);
+	return result;
+    }
+
+    /**
+     * Wait for client checkboxes; if ZTEC closes the panel after force-open, re-force and retry.
+     */
+    private void waitForClientCheckboxesWithForceOpen(PlaywrightService ps, Page page)
+	    throws InterruptedException {
+	for (int attempt = 1; attempt <= 5; attempt++) {
+	    if (!isClientDropdownOpen(page)) {
+		Object forced = forceOpenClientDropdown(page);
+		logger.info("Re-force-open Select client(s) before checkbox wait (attempt {}) result={}",
+			attempt, forced);
+		Thread.sleep(300);
+	    }
+	    try {
+		ps.waitForElement(page.locator(CLIENT_CHECKBOX_XPATH).first(),
+			"waiting for client checkboxes");
+		if (clientCheckboxesVisible(page)) {
+		    return;
+		}
+	    } catch (Exception e) {
+		logger.warn("Client checkboxes not ready (attempt {}): {}", attempt, e.getMessage());
+	    }
+	    forceOpenClientDropdown(page);
+	    Thread.sleep(500);
+	}
+	ps.waitForElement(page.locator(CLIENT_CHECKBOX_XPATH).first(), "waiting for client checkboxes");
     }
 
     /**
@@ -389,7 +481,10 @@ public class FlowText {
 	selected.click();
 	Thread.sleep(2000);
 	ps.click(page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("APPLY")), "APPLY client");
-	Thread.sleep(3000);
+	Thread.sleep(500);
+	// After Apply: clear force-open leftovers so the panel does not stay stuck open
+	forceCloseClientDropdown(page);
+	Thread.sleep(500);
 	return clientLocation;
     }
 
