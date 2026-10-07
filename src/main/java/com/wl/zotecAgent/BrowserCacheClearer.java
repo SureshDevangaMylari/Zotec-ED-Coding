@@ -150,6 +150,139 @@ public final class BrowserCacheClearer {
     }
 
     /**
+     * Clears cookies / origin storage for the desktop review UI (e.g. {@code http://10.1.242.218:8001/})
+     * so each bot run must enter username and password again.
+     */
+    public static void clearDesktopReviewSiteOnly(BrowserContext context, Page page, String reviewUrl,
+	    String when) {
+	if (context == null) {
+	    log.info("Desktop-review cookie clear skipped at {} — no context", when);
+	    return;
+	}
+
+	String host = hostFromUrl(reviewUrl);
+	if (host == null || host.isBlank()) {
+	    host = "10.1.242.218";
+	}
+	String hostLower = host.toLowerCase();
+
+	int removed = 0;
+	try {
+	    List<Cookie> cookies = context.cookies();
+	    for (Cookie c : cookies) {
+		if (c == null || c.domain == null) {
+		    continue;
+		}
+		String domain = c.domain.toLowerCase();
+		// cookie domain may be "10.1.242.218" or ".10.1.242.218"
+		String bare = domain.startsWith(".") ? domain.substring(1) : domain;
+		if (!bare.equals(hostLower) && !domain.contains(hostLower)) {
+		    continue;
+		}
+		try {
+		    BrowserContext.ClearCookiesOptions opts = new BrowserContext.ClearCookiesOptions()
+			    .setName(c.name)
+			    .setDomain(c.domain);
+		    if (c.path != null && !c.path.isBlank()) {
+			opts.setPath(c.path);
+		    }
+		    context.clearCookies(opts);
+		    removed++;
+		} catch (Exception e) {
+		    log.debug("Could not clear desktop-review cookie {}@{}: {}", c.name, c.domain,
+			    e.getMessage());
+		}
+	    }
+	    try {
+		context.clearCookies(new BrowserContext.ClearCookiesOptions().setDomain(hostLower));
+	    } catch (Exception ignored) {
+	    }
+	    try {
+		context.clearCookies(new BrowserContext.ClearCookiesOptions().setDomain("." + hostLower));
+	    } catch (Exception ignored) {
+	    }
+	    log.info("Cleared {} desktop-review cookie(s) for host={} at {}", removed, hostLower, when);
+	} catch (Exception e) {
+	    log.warn("Desktop-review Playwright cookie clear failed at {}: {}", when, e.getMessage());
+	}
+
+	Page cdpPage = page;
+	if (cdpPage == null) {
+	    try {
+		List<Page> pages = context.pages();
+		if (pages != null && !pages.isEmpty()) {
+		    cdpPage = pages.get(0);
+		}
+	    } catch (Exception ignored) {
+	    }
+	}
+	if (cdpPage == null) {
+	    return;
+	}
+	try {
+	    if (cdpPage.isClosed()) {
+		return;
+	    }
+	} catch (Exception e) {
+	    return;
+	}
+
+	CDPSession cdp = null;
+	try {
+	    cdp = context.newCDPSession(cdpPage);
+	    for (String origin : desktopReviewOrigins(reviewUrl)) {
+		try {
+		    JsonObject params = new JsonObject();
+		    params.addProperty("origin", origin);
+		    params.addProperty("storageTypes",
+			    "cookies,local_storage,indexeddb,cache_storage,service_workers");
+		    cdp.send("Storage.clearDataForOrigin", params);
+		    log.info("Cleared desktop-review origin storage {} at {}", origin, when);
+		} catch (Exception e) {
+		    log.debug("Storage.clearDataForOrigin {} failed at {}: {}", origin, when,
+			    e.getMessage());
+		}
+	    }
+	} catch (Exception e) {
+	    log.warn("Desktop-review CDP origin clear failed at {}: {}", when, e.getMessage());
+	} finally {
+	    if (cdp != null) {
+		try {
+		    cdp.detach();
+		} catch (Exception ignored) {
+		}
+	    }
+	}
+    }
+
+    private static Set<String> desktopReviewOrigins(String reviewUrl) {
+	Set<String> origins = new LinkedHashSet<>();
+	origins.add("http://10.1.242.218:8001");
+	if (reviewUrl != null && !reviewUrl.isBlank()) {
+	    try {
+		URI uri = URI.create(reviewUrl.trim());
+		if (uri.getScheme() != null && uri.getAuthority() != null) {
+		    origins.add(uri.getScheme() + "://" + uri.getAuthority());
+		}
+	    } catch (Exception ignored) {
+	    }
+	}
+	return origins;
+    }
+
+    private static String hostFromUrl(String url) {
+	if (url == null || url.isBlank()) {
+	    return null;
+	}
+	try {
+	    URI uri = URI.create(url.trim());
+	    return uri.getHost();
+	} catch (Exception e) {
+	    return null;
+	}
+    }
+
+    /**
      * Clears cookies + other site data and cached images/files for <b>All time</b>.
      */
     public static void clearAll(BrowserContext context, Page page, String when) {

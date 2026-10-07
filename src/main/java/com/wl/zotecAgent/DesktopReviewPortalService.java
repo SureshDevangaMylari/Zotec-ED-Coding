@@ -55,7 +55,8 @@ public class DesktopReviewPortalService {
     }
 
     /**
-     * Open review URL in a new tab and sign in once. Subsequent calls reuse the same tab.
+     * Open review URL in a new tab and sign in once per bot run. Cookies for this URL are
+     * cleared first so username/password are always required. Same-run calls reuse the tab.
      */
     public synchronized Page ensureOpenAndLoggedIn(BrowserContext context) throws InterruptedException {
 	if (portalPage != null && !portalPage.isClosed() && loggedIn) {
@@ -73,21 +74,30 @@ public class DesktopReviewPortalService {
 	    url = url + "/";
 	}
 
+	// Drop prior session so each Start Agent run gets the login form
+	loggedIn = false;
+	Page clearPage = null;
+	try {
+	    if (portalPage != null && !portalPage.isClosed()) {
+		clearPage = portalPage;
+	    } else if (context.pages() != null && !context.pages().isEmpty()) {
+		clearPage = context.pages().get(0);
+	    }
+	} catch (Exception ignored) {
+	}
+	BrowserCacheClearer.clearDesktopReviewSiteOnly(context, clearPage, url,
+		"before-desktop-review-login");
+
 	log.info("Opening desktop review portal (once) {}", url);
-	portalPage = context.newPage();
+	if (portalPage == null || portalPage.isClosed()) {
+	    portalPage = context.newPage();
+	}
 	portalPage.navigate(url);
 	try {
 	    portalPage.waitForLoadState(LoadState.DOMCONTENTLOADED);
 	} catch (Exception ignored) {
 	}
 	Thread.sleep(1000);
-
-	if (isStartProcessingVisible(portalPage) || isSubmitReviewVisible(portalPage)) {
-	    log.info("Desktop review already signed in — skipping login form");
-	    loggedIn = true;
-	    portalPage.bringToFront();
-	    return portalPage;
-	}
 
 	login(portalPage);
 	loggedIn = true;
