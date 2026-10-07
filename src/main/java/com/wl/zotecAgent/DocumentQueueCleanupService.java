@@ -53,18 +53,66 @@ public class DocumentQueueCleanupService {
     }
 
     /**
+     * Deletes leftover queued documents, keeping only the latest so Start processing
+     * works that chart. If the queue is empty or has a single document, nothing is deleted.
+     *
+     * @return kept {@code document_id}, or {@code null} if the queue was empty
+     */
+    public String clearQueuedDocumentsKeepLatest() {
+	List<QueuedDocument> queued = listQueuedDocuments();
+	if (queued.isEmpty()) {
+	    log.info("No documents in queue — continue to desktop review");
+	    return null;
+	}
+
+	QueuedDocument latest = pickLatest(queued);
+	log.info("Found {} document(s) in queue — keeping latest document_id={} and deleting the rest: {}",
+		queued.size(), latest.id, queued.stream().map(d -> d.id).toList());
+
+	HttpHeaders headers = DocumentProcessorAuth.uploadHeaders(desktopId, botSecret);
+	for (QueuedDocument doc : queued) {
+	    if (latest.id.equalsIgnoreCase(doc.id)) {
+		log.info("Skipping DELETE for latest document_id={}", doc.id);
+		continue;
+	    }
+	    deleteDocument(doc.id, headers);
+	}
+	return latest.id;
+    }
+
+    /**
      * Lists documents in the queue; deletes each id one-by-one.
      * Skips {@code keepDocumentId} (the record about to be reviewed) if present.
      * If the queue is empty, does nothing — caller continues to review.
      */
-    @SuppressWarnings("unchecked")
     public void clearQueuedDocumentsExcept(String keepDocumentId) {
+	List<QueuedDocument> queued = listQueuedDocuments();
+	List<String> documentIds = queued.stream().map(d -> d.id).toList();
+	if (documentIds.isEmpty()) {
+	    log.info("No documents in queue — continue to review API");
+	    return;
+	}
+
+	log.info("Found {} document(s) in queue — deleting one by one: {}", documentIds.size(), documentIds);
+
+	HttpHeaders headers = DocumentProcessorAuth.uploadHeaders(desktopId, botSecret);
+	for (String documentId : documentIds) {
+	    if (keepDocumentId != null && keepDocumentId.equalsIgnoreCase(documentId)) {
+		log.info("Skipping DELETE for current upload document_id={}", documentId);
+		continue;
+	    }
+	    deleteDocument(documentId, headers);
+	}
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<QueuedDocument> listQueuedDocuments() {
 	try {
 	    loginForDocumentApi();
 	} catch (Exception e) {
-	    log.warn("POST /auth/login failed — continuing to review without document cleanup: {}",
+	    log.warn("POST /auth/login failed — continuing without document cleanup: {}",
 		    e.getMessage());
-	    return;
+	    return List.of();
 	}
 
 	String listUrl = baseUrl.replaceAll("/+$", "") + "/documents";
@@ -73,7 +121,6 @@ public class DocumentQueueCleanupService {
 	log.info("Checking document queue: GET {} ({}={})",
 		listUrl, DocumentProcessorAuth.DESKTOP_ID_HEADER, desktopId);
 
-	List<String> documentIds = new ArrayList<>();
 	try {
 	    ResponseEntity<Map> response = restTemplate.exchange(
 		    listUrl,
@@ -83,11 +130,14 @@ public class DocumentQueueCleanupService {
 	    Map<String, Object> body = response.getBody();
 	    log.info("GET /documents response: {}", body);
 
+	    List<QueuedDocument> documents = new ArrayList<>();
 	    if (body != null) {
 		Object docsObj = body.get("documents");
 		if (docsObj instanceof List<?> docs) {
+		    int index = 0;
 		    for (Object item : docs) {
 			if (!(item instanceof Map<?, ?> m)) {
+			    index++;
 			    continue;
 			}
 			Object id = m.get("document_id");
@@ -100,30 +150,62 @@ public class DocumentQueueCleanupService {
 			if (id != null) {
 			    String s = String.valueOf(id).trim();
 			    if (!s.isEmpty()) {
-				documentIds.add(s);
+				documents.add(new QueuedDocument(s, createdEpoch(m), index));
 			    }
 			}
+			index++;
 		    }
 		}
 	    }
+	    return documents;
 	} catch (Exception e) {
-	    log.warn("GET /documents failed — continuing to review without cleanup: {}", e.getMessage());
-	    return;
+	    log.warn("GET /documents failed — continuing without cleanup: {}", e.getMessage());
+	    return List.of();
 	}
+    }
 
-	if (documentIds.isEmpty()) {
-	    log.info("No documents in queue — continue to review API");
-	    return;
-	}
-
-	log.info("Found {} document(s) in queue — deleting one by one: {}", documentIds.size(), documentIds);
-
-	for (String documentId : documentIds) {
-	    if (keepDocumentId != null && keepDocumentId.equalsIgnoreCase(documentId)) {
-		log.info("Skipping DELETE for current upload document_id={}", documentId);
-		continue;
+    private static QueuedDocument pickLatest(List<QueuedDocument> queued) {
+	QueuedDocument latest = queued.get(queued.size() - 1);
+	for (QueuedDocument doc : queued) {
+	    if (doc.createdEpoch > latest.createdEpoch
+		    || (doc.createdEpoch == latest.createdEpoch && doc.index > latest.index)) {
+		latest = doc;
 	    }
-	    deleteDocument(documentId, headers);
+	}
+	return latest;
+    }
+
+    private static long createdEpoch(Map<?, ?> m) {
+	for (String key : List.of("created_at", "createdAt", "uploaded_at", "uploadedAt",
+		"created", "timestamp", "ingested_at")) {
+	    Object v = m.get(key);
+	    if (v instanceof Number n) {
+		long x = n.longValue();
+		return x < 1_000_000_000_000L ? x * 1000L : x;
+	    }
+	    if (v instanceof String s && !s.isBlank()) {
+		try {
+		    return java.time.Instant.parse(s).toEpochMilli();
+		} catch (Exception ignored) {
+		}
+		try {
+		    return Long.parseLong(s.trim());
+		} catch (Exception ignored) {
+		}
+	    }
+	}
+	return Long.MIN_VALUE;
+    }
+
+    private static final class QueuedDocument {
+	final String id;
+	final long createdEpoch;
+	final int index;
+
+	QueuedDocument(String id, long createdEpoch, int index) {
+	    this.id = id;
+	    this.createdEpoch = createdEpoch;
+	    this.index = index;
 	}
     }
 

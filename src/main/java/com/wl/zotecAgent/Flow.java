@@ -21,7 +21,7 @@ import com.wl.util.PlaywrightService;
 import com.wl.zotecAgent.selection.ED_EMFormPlaywrightApplier;
 
 /**
- * Image-based coding flow: page images → PDF upload → review → fill form.
+ * Image-based coding flow: desktop review UI → JSON → fill form.
  * Walks UI-selected clients (or {@link AllowedClients} when none provided);
  * skips entries missing from Select client(s).
  * Patient looping and manual Submit/Skip match {@link FlowText}.
@@ -53,11 +53,14 @@ public class Flow {
 	    "The data cannot be submitted because it is locked for edit by another user";
 
     private final ZotecService zs;
+    private final DesktopReviewPortalService desktopReview;
     private final DocumentProcessingService documentProcessing;
 
     @Autowired
-    public Flow(ZotecService zs, DocumentProcessingService documentProcessing) {
+    public Flow(ZotecService zs, DesktopReviewPortalService desktopReview,
+	    DocumentProcessingService documentProcessing) {
 	this.zs = zs;
+	this.desktopReview = desktopReview;
 	this.documentProcessing = documentProcessing;
     }
 
@@ -114,6 +117,11 @@ public class Flow {
 		String selectedClientLocation = selectOnlyClientAndApply(ps, page, clientIndex);
 		logger.info("Selected client_location for upload metadata: {}", selectedClientLocation);
 
+		// After location Apply + chart load: open desktop review once (login not looped)
+		Thread.sleep(3000);
+		desktopReview.ensureOpenAndLoggedIn(context);
+		page.bringToFront();
+
 		int patientIndex = 0;
 		String previousFingerprint = null;
 
@@ -169,7 +177,7 @@ public class Flow {
 			continue;
 		    }
 
-		    boolean processed = processOnePatient(ps, page, selectedClientLocation);
+		    boolean processed = processOnePatient(ps, page, context, selectedClientLocation);
 		    if (!processed) {
 			logger.error("Patient #{} failed — waiting for manual Submit/Skip", patientIndex);
 		    }
@@ -494,10 +502,11 @@ public class Flow {
     }
 
     /**
-     * Collect page images → PDF upload (with well + client_location metadata) → fill form.
+     * Desktop review JSON (Submit review) → fill Zotec form. Upload/API poll replaced by
+     * {@link DesktopReviewPortalService} UI at :8001.
      */
-    private boolean processOnePatient(PlaywrightService ps, Page page, String selectedClientLocation)
-	    throws Exception {
+    private boolean processOnePatient(PlaywrightService ps, Page page, BrowserContext context,
+	    String selectedClientLocation) throws Exception {
 	if (hasReportCompletedMessage(page)) {
 	    logger.info("This report has been completed — skipping fill");
 	    return true;
@@ -509,26 +518,31 @@ public class Flow {
 	}
 
 	Map<String, Object> uploadMetadata = WorkfileSummaryScraper.build(page, selectedClientLocation);
-	Map<String, Object> uploadMeta = documentProcessing.uploadPdfAndAwaitResume(page, uploadMetadata);
+	logger.info("Uploading current Zotec PDF chart so :8001 matches this workfile");
+	Map<String, Object> uploadMeta = documentProcessing.uploadCurrentPdfChart(page, uploadMetadata);
+	String uploadedId = uploadMeta.get("document_id") instanceof String s ? s : null;
+	if (uploadedId == null || uploadedId.isBlank() || uploadMeta.get("upload_error") != null) {
+	    logger.error("Could not upload current chart (document_id={}, error={})",
+		    uploadedId, uploadMeta.get("upload_error"));
+	    return false;
+	}
 
-	@SuppressWarnings("unchecked")
-	Map<String, Object> resumePayload = uploadMeta.get("resume_payload") instanceof Map
-		? (Map<String, Object>) uploadMeta.get("resume_payload")
-		: Map.of();
+	// Image: keep uploaded id, refresh twice, wait 3s, Start processing, wait Submit review
+	Map<String, Object> resumePayload =
+		desktopReview.awaitCodingJsonAfterSubmitReview(context, 2, uploadedId);
+	page.bringToFront();
 
-	if (resumePayload.isEmpty()) {
-	    logger.error("No resume payload received (document_id={}, errors={})",
-		    uploadMeta.get("document_id"), uploadMeta.get("resume_error"));
+	if (resumePayload == null || resumePayload.isEmpty()) {
+	    logger.error("No resume payload received from desktop review Submit review");
 	    return false;
 	}
 
 	patientInfo = ResumePayloadMapper.toValidationMap(resumePayload);
-	patientInfo.put("document_id", uploadMeta.get("document_id"));
-	patientInfo.put("batch_id", uploadMeta.get("document_id"));
-	patientInfo.put("pdf_path", uploadMeta.get("pdf_path"));
+	patientInfo.put("document_id", uploadedId);
+	patientInfo.put("batch_id", uploadedId);
 	patientInfo.put("resume_payload", resumePayload);
 
-	logger.info("Resume payload received for document_id={}", uploadMeta.get("document_id"));
+	logger.info("Resume payload received from desktop review (keys={})", resumePayload.keySet());
 
 	zs.validatePatientDetails(page, patientInfo);
 
@@ -658,7 +672,8 @@ public class Flow {
 	ZtecVerifierGate.dismissYesIDidIfPresent(page);
 
 	logger.info(
-		"Waiting for USER to click Submit or Skip manually — bot will not click either button");
+		"Waiting for USER to click Submit or Skip manually — bot will not click either button documentNumber={}",
+		desktopReview.currentDocumentId());
 
 	for (int attempt = 0; attempt < 3600; attempt++) {
 	    if (dismissDataLockedIfPresent(page)) {
@@ -682,7 +697,8 @@ public class Flow {
 	    } catch (Exception ignored) {
 	    }
 	    if (attempt > 0 && attempt % 30 == 0) {
-		logger.info("Still waiting for manual Submit/Skip... ({}s)", attempt);
+		logger.info("Still waiting for manual Submit/Skip... ({}s) documentNumber={}",
+			attempt, desktopReview.currentDocumentId());
 	    }
 	    Thread.sleep(1000);
 	}

@@ -167,6 +167,63 @@ public class DocumentProcessingService {
         return uploadTextAndAwaitResume(text, null);
     }
 
+    /**
+     * Uploads the current dictated report to {@code :8000} and returns {@code document_id}.
+     * Does not poll review — desktop UI at {@code :8001} does that after queue cleanup.
+     */
+    public Map<String, Object> uploadCurrentTextChart(String text, Map<String, Object> uploadMetadata) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        try {
+            if (text == null || text.isBlank()) {
+                result.put("upload_error", "empty dictated report text");
+                return result;
+            }
+            String baseName = "report_" + System.currentTimeMillis();
+            Path textPath = imagePdfUploadService.saveTextFile(text, baseName);
+            result.put("text_path", textPath.toString().replace('\\', '/'));
+            Map<String, Object> uploadResult = imagePdfUploadService.uploadFile(textPath, uploadMetadata);
+            result.put("upload_response", uploadResult);
+            printUploadResponse(uploadResult, "text");
+            String recordId = resolveRecordId(uploadResult, baseName);
+            result.put("document_id", recordId);
+            result.put("record_id", recordId);
+            log.info("Uploaded current Zotec text chart document_id={}", recordId);
+        } catch (Exception e) {
+            log.error("Text chart upload failed: {}", e.getMessage(), e);
+            result.put("upload_error", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * Uploads the current workfile images as PDF to {@code :8000} and returns {@code document_id}.
+     * Does not poll review — desktop UI at {@code :8001} does that after queue cleanup.
+     */
+    public Map<String, Object> uploadCurrentPdfChart(Page page, Map<String, Object> uploadMetadata) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        try {
+            List<ImagePdfUploadService.PageImage> images = imagePdfUploadService.collectImagesFromPage(page);
+            if (images.isEmpty()) {
+                result.put("upload_error", "no images on page");
+                return result;
+            }
+            String baseName = "batch_" + System.currentTimeMillis();
+            Path pdfPath = imagePdfUploadService.buildPdfFromImages(images, baseName);
+            result.put("pdf_path", pdfPath.toString().replace('\\', '/'));
+            Map<String, Object> uploadResult = imagePdfUploadService.uploadFile(pdfPath, uploadMetadata);
+            result.put("upload_response", uploadResult);
+            printUploadResponse(uploadResult);
+            String recordId = resolveRecordId(uploadResult, baseName);
+            result.put("document_id", recordId);
+            result.put("record_id", recordId);
+            log.info("Uploaded current Zotec PDF chart document_id={}", recordId);
+        } catch (Exception e) {
+            log.error("PDF chart upload failed: {}", e.getMessage(), e);
+            result.put("upload_error", e.getMessage());
+        }
+        return result;
+    }
+
     private String resolveRecordId(Map<String, Object> uploadResult, String fallbackBaseName) {
         String recordId = imagePdfUploadService.extractRecordId(uploadResult);
         if (recordId == null || recordId.isBlank()) {
