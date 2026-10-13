@@ -3,6 +3,8 @@
  * Used as checkbox options in the agent control UI.
  */
 window.AGENT_CLIENTS = [
+	"Franciscan Indianapolis Reports",
+	 "Franciscan Mooresville Reports",
 	"SSM Clay City Reports",
 	"Mitchell Reports",
 	"Missing Union ED Reports",
