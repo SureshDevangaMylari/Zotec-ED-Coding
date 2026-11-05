@@ -27,6 +27,13 @@ public class Service {
     /** Disable-charge reason when removing leftover CPT rows that are not in JSON. */
     private static final String DISABLE_REASON_NRC = "NRC - Flouro used in OR";
 
+    /**
+     * ED E/M levels: when present in the JSON {@code cpt} array, leave the matching
+     * portal row alone (do not clear, re-add, or overwrite modifiers/units/diagnoses/POS).
+     */
+    private static final Set<String> PROTECTED_EM_CPT_CODES =
+	    Set.of("99282", "99283", "99284", "99285");
+
     void login(Page page) throws Exception {
 
 	PlaywrightService ps = new PlaywrightService(page);
@@ -82,9 +89,12 @@ public class Service {
     }
 
     /**
-     * Deletes every populated CPT on the UI (including zeros / portal EM), then fills only
-     * codes from JSON. After codes are applied, fills modifier / units / diagnosis pointers /
-     * servicelocation / POS. Description is left to Zotec (auto-set when code is chosen).
+     * Clears UI CPT rows (except protected EM codes that appear in JSON), then fills only
+     * non-protected codes from JSON. After codes are applied, fills modifier / units /
+     * diagnosis pointers / servicelocation / POS for those rows.
+     * Protected EM levels {@code 99282}/{@code 99283}/{@code 99284}/{@code 99285} present
+     * in the JSON {@code cpt} array are left untouched on the portal.
+     * Description is left to Zotec (auto-set when code is chosen).
      * Mismatch is logged only — bot does not stop (user can Submit/Skip).
      */
     void validateCPT(Page page, List<Map<String, Object>> cptEntries, List<String> icdOrder)
@@ -94,19 +104,32 @@ public class Service {
 	}
 	List<String> orderedCodes = new ArrayList<>();
 	Set<String> expectedNormalized = new HashSet<>();
+	Set<String> preserveProtectedEm = new HashSet<>();
 	for (Map<String, Object> entry : cptEntries) {
 	    String code = str(entry, "code");
 	    if (code == null) {
 		continue;
 	    }
 	    String norm = normalizeCptCode(code);
-	    if (norm.isEmpty() || expectedNormalized.contains(norm)) {
+	    if (norm.isEmpty()) {
+		continue;
+	    }
+	    if (isProtectedEmCpt(norm)) {
+		if (preserveProtectedEm.add(norm)) {
+		    PlayTestActionLog.skip("CPT", "protected EM '" + code
+			    + "' in JSON — leave portal row untouched");
+		    logger.info("CPT '{}' is protected EM — will not clear/add/fill this code", code);
+		}
+		continue;
+	    }
+	    if (expectedNormalized.contains(norm)) {
 		continue;
 	    }
 	    expectedNormalized.add(norm);
 	    orderedCodes.add(code);
 	}
-	PlayTestActionLog.step("validateCPT — expected: " + orderedCodes);
+	PlayTestActionLog.step("validateCPT — fill from JSON: " + orderedCodes
+		+ (preserveProtectedEm.isEmpty() ? "" : " (leave protected EM: " + preserveProtectedEm + ")"));
 
 	Locator rows = page.locator(CPT_ROWS);
 	rows.first().waitFor();
@@ -114,16 +137,22 @@ public class Service {
 	List<String> uiOrder = collectCptUiCodeList(page);
 	logger.info("CPT UI values before clear+fill: {}", uiOrder);
 
-	// 1) Delete ALL existing UI CPT codes (portal EM, zeros, leftovers)
-	PlayTestActionLog.update("validateCPT", "clear all UI CPT rows then fill from JSON");
-	clearAllCptRows(page);
+	// 1) Delete UI CPT codes except protected EM that appear in JSON
+	PlayTestActionLog.update("validateCPT",
+		preserveProtectedEm.isEmpty()
+			? "clear all UI CPT rows then fill from JSON"
+			: "clear UI CPT rows (preserve protected EM " + preserveProtectedEm + ") then fill from JSON");
+	clearAllCptRows(page, preserveProtectedEm);
 	Set<String> uiValues = collectCptUiCodes(page);
 	logger.info("CPT UI values after clear: {}", uiValues);
-	if (!uiValues.isEmpty()) {
-	    logger.warn("CPT clear incomplete — leftover UI codes {}: will still try to add JSON codes", uiValues);
+	Set<String> leftoverAfterClear = new HashSet<>(uiValues);
+	leftoverAfterClear.removeAll(preserveProtectedEm);
+	if (!leftoverAfterClear.isEmpty()) {
+	    logger.warn("CPT clear incomplete — leftover UI codes {}: will still try to add JSON codes",
+		    leftoverAfterClear);
 	}
 
-	// 2) Add only JSON CPT codes onto blank rows
+	// 2) Add only non-protected JSON CPT codes onto blank rows
 	for (String expected : orderedCodes) {
 	    String norm = normalizeCptCode(expected);
 	    uiValues = collectCptUiCodes(page);
@@ -138,19 +167,30 @@ public class Service {
 
 	uiValues = collectCptUiCodes(page);
 	logger.info("CPT UI values after clear+fill: {}", uiValues);
-	if (!uiValues.equals(expectedNormalized)) {
-	    String message = "CPT UI does not match JSON after sync. UI=" + uiValues + " JSON="
-		    + expectedNormalized + " — continuing so user can Submit/Skip";
+	Set<String> missingFillable = new HashSet<>(expectedNormalized);
+	missingFillable.removeAll(uiValues);
+	if (!missingFillable.isEmpty()) {
+	    String message = "CPT UI missing JSON codes after sync. missing=" + missingFillable
+		    + " UI=" + uiValues + " JSON fillable=" + expectedNormalized
+		    + " protected EM left alone=" + preserveProtectedEm
+		    + " — continuing so user can Submit/Skip";
 	    logger.warn(message);
 	    PlayTestActionLog.skip("validateCPT verification", message);
 	} else {
-	    PlayTestActionLog.update("validateCPT verification", "UI exactly matches JSON: " + orderedCodes);
+	    PlayTestActionLog.update("validateCPT verification",
+		    "UI has fillable JSON codes: " + orderedCodes
+			    + (preserveProtectedEm.isEmpty() ? ""
+				    : "; protected EM untouched: " + preserveProtectedEm));
 	}
 
-	// 3) Fill row details for each JSON CPT that exists on the UI
+	// 3) Fill row details for each non-protected JSON CPT that exists on the UI
 	for (Map<String, Object> entry : cptEntries) {
 	    String code = str(entry, "code");
 	    if (code == null) {
+		continue;
+	    }
+	    if (isProtectedEmCpt(code)) {
+		PlayTestActionLog.skip("CPT details " + code, "protected EM — not filling row details");
 		continue;
 	    }
 	    Locator row = findCptRow(page, code);
@@ -182,6 +222,10 @@ public class Service {
 	}
 
 	for (Map<String, Object> entry : cptEntries) {
+	    String code = str(entry, "code");
+	    if (code != null && isProtectedEmCpt(code)) {
+		continue;
+	    }
 	    String rowPos = firstNonBlank(str(entry, "pos"), str(entry, "pos_code"), str(entry, "place_of_service"));
 	    if (rowPos != null && !rowPos.isBlank()) {
 		logger.info("Final POS ensure after all CPT fills: '{}'", rowPos);
@@ -190,6 +234,12 @@ public class Service {
 		break;
 	    }
 	}
+    }
+
+    /** True for ED E/M levels that must not be overwritten when they appear in JSON {@code cpt}. */
+    static boolean isProtectedEmCpt(String code) {
+	String norm = normalizeCptCode(code);
+	return !norm.isEmpty() && PROTECTED_EM_CPT_CODES.contains(norm);
     }
 
     /**
@@ -1239,16 +1289,24 @@ public class Service {
     }
 
     /**
-     * Deletes every populated CPT row on the UI (including {@code 00000} and portal EM).
-     * Used before refilling strictly from JSON.
+     * Deletes every populated CPT row on the UI (including {@code 00000} and portal EM),
+     * except codes in {@code preserveNormalized} (protected EM levels present in JSON).
+     * Used before refilling from JSON.
      */
     private void clearAllCptRows(Page page) throws InterruptedException {
+	clearAllCptRows(page, Set.of());
+    }
+
+    private void clearAllCptRows(Page page, Set<String> preserveNormalized) throws InterruptedException {
+	Set<String> preserve = preserveNormalized != null ? preserveNormalized : Set.of();
 	for (int pass = 0; pass < 8; pass++) {
 	    Locator rows = page.locator(CPT_ROWS);
 	    Set<String> before = collectCptUiCodes(page);
-	    logger.info("CPT clear-all pass {}: UI={}", pass + 1, before);
-	    if (before.isEmpty()) {
-		logger.info("CPT clear complete — UI has no populated CPT rows");
+	    logger.info("CPT clear-all pass {}: UI={} preserve={}", pass + 1, before, preserve);
+	    Set<String> deletable = new HashSet<>(before);
+	    deletable.removeAll(preserve);
+	    if (deletable.isEmpty()) {
+		logger.info("CPT clear complete — only preserved rows remain (or none): {}", before);
 		return;
 	    }
 
@@ -1265,6 +1323,11 @@ public class Service {
 			continue;
 		    }
 		    String norm = normalizeCptCode(value);
+		    if (preserve.contains(norm)) {
+			logger.info("Keeping CPT '{}' — protected EM present in JSON", value);
+			PlayTestActionLog.skip("CPT clear", "preserve protected EM '" + value + "'");
+			continue;
+		    }
 		    PlayTestActionLog.delete("CPT row", value + " (clear-all before JSON fill)");
 		    logger.info("Deleting CPT '{}' — clear-all before JSON fill (reason '{}')", value,
 			    DISABLE_REASON_NRC);

@@ -191,7 +191,7 @@ public class ImagePdfUploadService {
      * POST multipart/form-data:
      * <ul>
      *   <li>{@code file} — PDF or text file (unchanged)</li>
-     *   <li>{@code form_data} — JSON string of workfile well fields + {@code client_location} + {@code Batch Text}</li>
+     *   <li>{@code form_data} — JSON string of workfile well fields + {@code client_location} + {@code Batch Text} + {@code chargeID}</li>
      * </ul>
      *
      * @param formData well summary + Select client(s) location (may be null)
